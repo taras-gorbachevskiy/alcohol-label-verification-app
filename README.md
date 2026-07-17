@@ -66,4 +66,4 @@ railway domain
 
 Health check + hello UI only. Label verification features come in later phases.
 
-**Live URL:** _(paste Railway URL here after first deploy)_
+**Live URL:** https://ttb-label-verification-production-c242.up.railway.app/
