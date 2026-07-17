@@ -1,11 +1,13 @@
 [project]
 name = "alcohol-label-verification-app"
 version = "0.1.0"
-description = "Phase 0 scaffold: FastAPI health check + hello frontend"
+description = "TTB label verification: comparison engine + Phase 0 health UI"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
+    "pydantic>=2.0",
+    "rapidfuzz>=3.9.0",
     "uvicorn[standard]>=0.32.0",
 ]
 
