@@ -14,6 +14,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.coverage
+htmlcov/
+coverage.xml
+*.log
 
 # Credentials / keys
 *.pem

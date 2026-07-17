@@ -39,10 +39,6 @@ def parse_abv(value: str) -> float | None:
     match = _ABV_RE.search(value)
     if match is None:
         return None
-    # Reject pure words: require a digit somewhere (already in regex).
-    # If the string has no digit at all, regex fails. "forty" → None.
-    if not re.search(r"\d", value):
-        return None
     # Prefer a match that includes % when present, else first number.
     percent_match = re.search(r"(\d+(?:\.\d+)?)\s*%", value)
     if percent_match:

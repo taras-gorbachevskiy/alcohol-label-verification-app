@@ -1,12 +1,24 @@
-# Alcohol Label Verification — Phase 0
+# Alcohol Label Verification
 
-Minimal FastAPI app with a `/health` endpoint and a hello page that fetches it. One process, one URL (same origin — no CORS).
+TTB label verification proof-of-concept. One FastAPI process, same-origin UI (no CORS).
+
+## Current status
+
+| Layer | Status |
+|-------|--------|
+| HTTP `/health` + hello page at `/` | Live (Phase 0 scaffold) |
+| Comparison library (`compare_labels`) | Done (Phase 1) — unit-tested, not wired to HTTP/UI |
+| Verify API, AI/OCR extraction, batch upload UI | Not built yet |
+
+**Phase 1 library:** compare typed application data vs an extracted label across brand, class/type, producer, country, ABV, net contents, and government warning. Fuzzy/normalized matching for most fields; **government warning is an exact, case-sensitive match**. Any field `FAIL` ⇒ overall verdict `NEEDS_REVIEW`.
+
+Entry point: `from app.comparison import compare_labels`.
 
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/) (Python 3.12 via `.python-version`)
 - Optional: Docker + Docker Compose for local image parity
-- Railway account (free trial) for deploy
+- Railway account for deploy
 
 ## Local run
 
@@ -61,9 +73,5 @@ railway domain
 - Commit only `.env.example`.
 - Real `.env` is gitignored. Never put API keys in source.
 - Production secrets: Railway Variables UI only.
-
-## Phase 0 scope
-
-Health check + hello UI only. Label verification features come in later phases.
 
 **Live URL:** https://ttb-label-verification-production-c242.up.railway.app/

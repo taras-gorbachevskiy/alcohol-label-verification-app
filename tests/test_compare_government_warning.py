@@ -30,16 +30,13 @@ def test_title_case_warning_fails_strict_case_sensitive() -> None:
     assert result.actual == TITLE_CASE_WARNING
     # Same letters ignoring case would match — our comparator must still FAIL.
     assert TITLE_CASE_WARNING.casefold() == ALL_CAPS_WARNING.casefold()
-    assert "Government Warning" in TITLE_CASE_WARNING
-    assert "GOVERNMENT WARNING" in ALL_CAPS_WARNING
 
 
 def test_warning_missing_colon_fails() -> None:
     """REVIEW #6: warning missing the colon FAILS."""
     result = compare_government_warning(ALL_CAPS_WARNING, MISSING_COLON_WARNING)
     assert result.status == "FAIL"
-    assert ":" in ALL_CAPS_WARNING
-    assert "GOVERNMENT WARNING:" not in MISSING_COLON_WARNING
+    assert result.expected == ALL_CAPS_WARNING
     assert result.actual == MISSING_COLON_WARNING
 
 
