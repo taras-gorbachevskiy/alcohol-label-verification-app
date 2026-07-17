@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Label Verification — Hello</title>
+    <style>
+      :root {
+        --bg: #f6f3ee;
+        --ink: #1c1917;
+        --muted: #57534e;
+        --ok: #166534;
+        --bad: #991b1b;
+        --panel: #ffffff;
+        --line: #d6d3d1;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        color: var(--ink);
+        background:
+          radial-gradient(ellipse 80% 50% at 10% 0%, #e7e5e4 0%, transparent 55%),
+          radial-gradient(ellipse 60% 40% at 90% 20%, #d6d3d1 0%, transparent 50%),
+          var(--bg);
+        display: grid;
+        place-items: center;
+        padding: 2rem 1.25rem;
+      }
+      main {
+        width: min(36rem, 100%);
+      }
+      h1 {
+        margin: 0 0 0.35rem;
+        font-size: clamp(1.75rem, 4vw, 2.25rem);
+        letter-spacing: -0.02em;
+        font-weight: 700;
+      }
+      p {
+        margin: 0 0 1.5rem;
+        color: var(--muted);
+        font-size: 1.05rem;
+        line-height: 1.45;
+      }
+      button {
+        font: inherit;
+        font-size: 1rem;
+        padding: 0.7rem 1.1rem;
+        border: 1px solid var(--ink);
+        background: var(--ink);
+        color: var(--bg);
+        cursor: pointer;
+      }
+      button:hover {
+        opacity: 0.9;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
+      #result {
+        margin-top: 1.25rem;
+        padding: 1rem 1.1rem;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        min-height: 4.5rem;
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.95rem;
+        line-height: 1.4;
+      }
+      #result.ok {
+        color: var(--ok);
+        border-color: #86efac;
+      }
+      #result.err {
+        color: var(--bad);
+        border-color: #fca5a5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Label Verification</h1>
+      <p>Phase 0 hello — calls the backend <code>/health</code> endpoint.</p>
+      <button id="check" type="button">Check health</button>
+      <pre id="result" aria-live="polite">Click “Check health” to load the response.</pre>
+    </main>
+    <script>
+      const button = document.getElementById("check");
+      const result = document.getElementById("result");
+
+      async function checkHealth() {
+        button.disabled = true;
+        result.className = "";
+        result.textContent = "Fetching /health …";
+        try {
+          // Relative URL keeps frontend and API same-origin (no CORS).
+          const response = await fetch("/health");
+          const text = await response.text();
+          let body = text;
+          try {
+            body = JSON.stringify(JSON.parse(text), null, 2);
+          } catch (_) {
+            /* keep raw text */
+          }
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}\n${body}`);
+          }
+          result.className = "ok";
+          result.textContent = body;
+        } catch (error) {
+          result.className = "err";
+          result.textContent = String(error.message || error);
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      button.addEventListener("click", checkHealth);
+      checkHealth();
+    </script>
+  </body>
+</html>

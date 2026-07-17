@@ -1,0 +1,16 @@
+.git
+.venv
+.env
+.env.*
+!.env.example
+__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.pyc
+.DS_Store
+.idea
+.vscode
+tests
+README.md
+AGENTS.md
