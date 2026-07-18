@@ -7,8 +7,8 @@ TTB label verification proof-of-concept. One FastAPI process, same-origin UI (no
 | Layer | Status |
 |-------|--------|
 | HTTP `/health` + hello page at `/` | Live (Phase 0 scaffold) |
-| Comparison library (`compare_labels`) | Done (Phase 1) — unit-tested, not wired to HTTP/UI |
-| Vision extraction (`VisionService`) | Done (Phase 2) — library + unit tests (mocked); not wired to HTTP/UI |
+| Comparison library (`compare_labels`) | Done (Phase 1) — unit-tested and wired to `/verify` |
+| Vision extraction (`VisionService`) | Done (Phase 2) — mocked tests and wired to `/verify` |
 | HTTP `POST /verify` | Done (Phase 3) — validated multipart orchestration |
 | Batch upload UI | Not built yet |
 

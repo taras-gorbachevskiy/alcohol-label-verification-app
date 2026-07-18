@@ -416,6 +416,16 @@ def test_verify_malformed_multipart_returns_clear_400() -> None:
     assert "upload could not be read" in response.json()["error"]["message"].lower()
 
 
+def test_verify_get_preserves_method_not_allowed_response() -> None:
+    client = TestClient(app)
+
+    response = client.get("/verify")
+
+    assert response.status_code == 405
+    assert response.json() == {"detail": "Method Not Allowed"}
+    assert response.headers["allow"] == "POST"
+
+
 def test_bad_upload_does_not_construct_live_vision_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

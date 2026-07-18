@@ -163,7 +163,13 @@ async def http_error_handler(
     request: Request,
     exc: StarletteHTTPException,
 ) -> JSONResponse:
-    if request.url.path != "/verify":
+    content_type = request.headers.get("content-type", "").lower()
+    is_multipart_parse_error = (
+        request.url.path == "/verify"
+        and exc.status_code == 400
+        and content_type.startswith("multipart/form-data")
+    )
+    if not is_multipart_parse_error:
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
@@ -171,7 +177,7 @@ async def http_error_handler(
         )
     return _error_response(
         request,
-        status_code=exc.status_code if 400 <= exc.status_code < 500 else 400,
+        status_code=400,
         code="INVALID_MULTIPART",
         message="The upload could not be read. Submit an image and application data.",
         field=None,
