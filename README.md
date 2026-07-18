@@ -17,13 +17,17 @@ TTB label verification proof-of-concept. One FastAPI process, same-origin UI (no
 
 Entry points: `from app.comparison import compare_labels`, `from app.vision import VisionService`.
 
-**Phase 2 library:** orient, bound, and preprocess an image (JPEG ≤1536px) → OpenAI `gpt-4o-mini` typed structured output → `ExtractedLabel`. Bad photos, transient API failures, refusals, and parse errors soft-fail to all-null; configuration failures raise. Tests use an injected mock or `FakeVisionService` (no live API).
+**Phase 2 library:** orient, bound, and preprocess an image (JPEG ≤1536px) → OpenAI `gpt-4o-mini` typed structured output → `ExtractedLabel`. Locally invalid photos return an all-null extraction for library callers. Provider outages, refusals, and malformed provider responses raise `VisionUnavailableError` so the HTTP API cannot mistake a failed extraction for seven missing label fields. Tests use an injected mock or `FakeVisionService` (no live API).
 
 **Phase 3 API:** `POST /verify` accepts a JPEG, PNG, or WebP `image` plus an
-`application` JSON multipart field. All seven application fields are required.
+`application` JSON multipart field. All seven application fields are required
+and limited to 2,000 characters each. The full multipart request is limited to
+21 MiB, including the 20 MiB image allowance and multipart overhead.
 The response includes the overall verdict, all expected-vs-found field results,
 and measured `latency_ms`. Client upload errors return stable, human-readable
-4xx responses; stack traces are never returned.
+4xx responses; stack traces are never returned. A temporary vision-provider or
+extraction failure returns HTTP `503` with `VERIFICATION_UNAVAILABLE`, never a
+misleading compliance verdict.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/verify \
@@ -39,8 +43,10 @@ No application values, image bytes, or extracted label text are logged.
 label photo and the seven expected values. It posts the existing multipart
 contract to `/verify`, then shows an `APPROVED` or `NEEDS REVIEW` verdict and a
 plain-language PASS/FAIL result for every field. Failed fields show what the
-label should say and what was found. Upload, network, timeout, and service errors
-keep the user's entries in place and render as readable guidance.
+label should say and what was found. A successful response replaces the form
+and fixed submit control with the result and one “Check Another Label” action,
+preventing accidental duplicate paid calls. Upload, network, timeout, and
+service errors keep the user's entries in place and render as readable guidance.
 
 ### Abuse protection
 
@@ -56,7 +62,9 @@ key. The defaults are conservative for this public proof-of-concept:
 
 Client limits run before multipart parsing. The global and concurrency limits
 run after validation but before `VisionService`, so bad submissions cannot use
-the paid-call allowance. A rejected request returns HTTP `429`, the normal
+the paid-call allowance. The 21 MiB total request guard checks declared and
+streamed sizes before paid work; oversized requests return `413 REQUEST_TOO_LARGE`.
+A rejected rate-limit request returns HTTP `429`, the normal
 `ErrorResponse` JSON, and an integer `Retry-After` header. `RATE_LIMITED` means a
 client or global window is full; `VERIFICATION_BUSY` means both vision slots are
 active. The UI keeps the selected photo and entered values while explaining how
@@ -78,6 +86,7 @@ uv run python scripts/extract_sample.py --runs 3 --variants
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/) (Python 3.12 via `.python-version`)
+- Node.js 20.19+ and npm (development tests only; not included in production)
 - Optional: Docker + Docker Compose for local image parity
 - Railway account for deploy
 
@@ -99,6 +108,9 @@ Tests:
 
 ```bash
 uv run pytest
+npm ci
+npm test
+npm run check
 ```
 
 Optional Docker (requires Docker Desktop):
@@ -138,6 +150,8 @@ docker compose up --build
    - `https://<your-app>.up.railway.app/` → single-label form loads
    - Submit a label photo and all seven values → verdict and seven field results appear
    - Submit an unsupported or unreadable file → a plain-language error appears
+   - Provider/extraction outage → readable `503 VERIFICATION_UNAVAILABLE`, not a verdict
+   - Upload above the total request limit → readable `413 REQUEST_TOO_LARGE`
    - Exceed a limit → entries remain and a readable wait message appears
 
 CLI alternative (if `railway` CLI is installed and logged in):

@@ -28,9 +28,10 @@ def test_single_label_page_has_required_controls() -> None:
     assert 'id="error-summary"' in page
     for field_name in FIELD_NAMES:
         assert f'name="{field_name}"' in page
+    assert page.count('maxlength="2000"') == 7
 
 
-def test_page_loads_versioned_static_assets() -> None:
+def test_page_loads_static_assets() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
@@ -43,36 +44,3 @@ def test_page_loads_versioned_static_assets() -> None:
     assert "text/css" in stylesheet.headers["content-type"]
     assert script.status_code == 200
     assert "javascript" in script.headers["content-type"]
-
-
-def test_browser_controller_posts_expected_multipart_contract() -> None:
-    script = client.get("/static/app.js").text
-
-    assert 'fetch("/verify"' in script
-    assert 'formData.append("image"' in script
-    assert 'formData.append("application"' in script
-    assert "JSON.stringify(applicationPayload())" in script
-    for field_name in FIELD_NAMES:
-        assert f'key: "{field_name}"' in script
-
-
-def test_results_and_errors_use_plain_language() -> None:
-    script = client.get("/static/app.js").text
-
-    assert "APPROVED" in script
-    assert "NEEDS REVIEW" in script
-    assert "Should say" in script
-    assert "Label says" in script
-    assert "Not found on the photo" in script
-    assert "Check your internet connection and try again" in script
-    assert "Your information is still here" in script
-    assert 'code === "RATE_LIMITED"' in script
-    assert 'code === "VERIFICATION_BUSY"' in script
-    assert 'response.headers.get("Retry-After")' in script
-    assert "Too many labels have been checked" in script
-    assert "The checker is busy" in script
-
-    request_error_handler = script.split("function showRequestError", 1)[1].split(
-        "function isValidResult", 1
-    )[0]
-    assert "form.reset" not in request_error_handler

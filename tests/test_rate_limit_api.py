@@ -129,15 +129,27 @@ def test_sixth_request_in_a_minute_is_rejected_before_vision(
     assert "203.0.113.1" not in caplog.text
 
 
-def test_openapi_documents_structured_429_response(client: TestClient) -> None:
+@pytest.mark.parametrize("status_code", ["413", "429", "503"])
+def test_openapi_documents_structured_service_responses(
+    client: TestClient,
+    status_code: str,
+) -> None:
     response = client.get("/openapi.json")
 
     assert response.status_code == 200
-    rate_limit_response = response.json()["paths"]["/verify"]["post"]["responses"][
-        "429"
+    documented_response = response.json()["paths"]["/verify"]["post"]["responses"][
+        status_code
     ]
-    schema = rate_limit_response["content"]["application/json"]["schema"]
+    schema = documented_response["content"]["application/json"]["schema"]
     assert schema == {"$ref": "#/components/schemas/ErrorResponse"}
+
+
+def test_openapi_documents_request_and_field_size_limits(client: TestClient) -> None:
+    document_text = str(client.get("/openapi.json").json())
+
+    assert "21 MiB" in document_text
+    assert "20 MiB" in document_text
+    assert "2,000 characters per field" in document_text
 
 
 def test_thirty_first_request_in_an_hour_is_rejected(

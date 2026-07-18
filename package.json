@@ -1,0 +1,11 @@
+{
+  "name": "alcohol-label-verification-ui-tests",
+  "private": true,
+  "scripts": {
+    "check": "node --check app/static/app.js",
+    "test": "node --test tests/ui.behavior.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

@@ -228,7 +228,11 @@
       EMPTY_APPLICATION: "Complete all seven items, then check the label again.",
       INVALID_APPLICATION_JSON: "Check all seven items and try again.",
       INVALID_APPLICATION: "Check all seven items and try again.",
+      APPLICATION_FIELD_TOO_LONG:
+        "This entry is too long. Use 2,000 characters or fewer.",
       INVALID_MULTIPART: "We could not read this submission. Please try again.",
+      REQUEST_TOO_LARGE:
+        "This upload is too large. Choose a photo smaller than 20 MB.",
       UNSUPPORTED_IMAGE_TYPE:
         "Choose a JPG, PNG, or WebP photo. Most phone photos will work.",
       IMAGE_TOO_LARGE: "This photo is too large. Choose one smaller than 20 MB.",
@@ -238,6 +242,10 @@
       VERIFICATION_UNAVAILABLE:
         "We couldn’t check this label. Your information is still here. Please try again.",
     };
+
+    if (code === "APPLICATION_FIELD_TOO_LONG") {
+      return messages[code];
+    }
 
     if (fieldName?.startsWith("application.")) {
       const key = fieldName.slice("application.".length);
@@ -299,15 +307,49 @@
     if (!payload || !["PASS", "NEEDS_REVIEW"].includes(payload.verdict)) {
       return false;
     }
-    if (!Array.isArray(payload.fields)) {
+    if (
+      typeof payload.latency_ms !== "number" ||
+      !Number.isFinite(payload.latency_ms) ||
+      payload.latency_ms < 0
+    ) {
       return false;
     }
-    return FIELDS.every((field) =>
-      payload.fields.some(
-        (result) =>
-          result.field === field.key && ["PASS", "FAIL"].includes(result.status),
-      ),
-    );
+    if (!Array.isArray(payload.fields) || payload.fields.length !== FIELDS.length) {
+      return false;
+    }
+
+    const seen = new Set();
+    for (const result of payload.fields) {
+      if (!result || typeof result !== "object") {
+        return false;
+      }
+      if (!fieldByKey.has(result.field) || seen.has(result.field)) {
+        return false;
+      }
+      if (!["PASS", "FAIL"].includes(result.status)) {
+        return false;
+      }
+      if (
+        ![result.expected, result.actual].every(
+          (value) => value === null || typeof value === "string",
+        )
+      ) {
+        return false;
+      }
+      if (
+        !(
+          result.score === null ||
+          (typeof result.score === "number" && Number.isFinite(result.score))
+        ) ||
+        !(result.detail === null || typeof result.detail === "string")
+      ) {
+        return false;
+      }
+      seen.add(result.field);
+    }
+
+    const hasFailure = payload.fields.some((result) => result.status === "FAIL");
+    return payload.verdict === (hasFailure ? "NEEDS_REVIEW" : "PASS");
   }
 
   function makeTextElement(tagName, className, text) {
@@ -396,6 +438,7 @@
         resultItem(field, result),
       ),
     );
+    hide(form);
     show(results);
     results.focus();
     results.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -499,6 +542,7 @@
     clearPreview();
     clearErrors();
     hide(results);
+    show(form);
     resultList.replaceChildren();
     imageHelp.textContent = "No photo chosen";
     imageInput.focus();

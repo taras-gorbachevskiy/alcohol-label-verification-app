@@ -21,7 +21,7 @@ from PIL import Image
 
 import app.vision.service as service_module
 from app.models import ExtractedLabel
-from app.vision import FakeVisionService, VisionService
+from app.vision import FakeVisionService, VisionService, VisionUnavailableError
 from app.vision.prompt import SYSTEM_PROMPT, USER_PROMPT
 from app.vision.service import MAX_COMPLETION_TOKENS
 from tests.warning_fixtures import ALL_CAPS_WARNING
@@ -112,14 +112,13 @@ def test_extract_partial_fields() -> None:
     assert result.abv is None
 
 
-def test_extract_timeout_returns_empty() -> None:
+def test_extract_timeout_raises_unavailable() -> None:
     client = MagicMock()
     client.chat.completions.parse.side_effect = APITimeoutError(request=MagicMock())
     service = VisionService(client=client)
 
-    result = service.extract(_tiny_jpeg())
-
-    assert result == ExtractedLabel()
+    with pytest.raises(VisionUnavailableError):
+        service.extract(_tiny_jpeg())
 
 
 @pytest.mark.parametrize(
@@ -132,12 +131,15 @@ def test_extract_timeout_returns_empty() -> None:
         LengthFinishReasonError(completion=MagicMock(usage=None)),
     ],
 )
-def test_extract_transient_or_filtered_failure_returns_empty(error: Exception) -> None:
+def test_extract_transient_or_filtered_failure_raises_unavailable(
+    error: Exception,
+) -> None:
     client = MagicMock()
     client.chat.completions.parse.side_effect = error
     service = VisionService(client=client)
 
-    assert service.extract(_tiny_jpeg()) == ExtractedLabel()
+    with pytest.raises(VisionUnavailableError):
+        service.extract(_tiny_jpeg())
 
 
 def test_extract_auth_error_fails_fast() -> None:
@@ -177,15 +179,16 @@ def test_extract_configuration_error_fails_fast(
         service.extract(_tiny_jpeg())
 
 
-def test_extract_parsed_none_returns_empty() -> None:
+def test_extract_parsed_none_raises_unavailable() -> None:
     client = MagicMock()
     client.chat.completions.parse.return_value = _parsed_completion(None)
     service = VisionService(client=client)
 
-    assert service.extract(_tiny_jpeg()) == ExtractedLabel()
+    with pytest.raises(VisionUnavailableError):
+        service.extract(_tiny_jpeg())
 
 
-def test_extract_refusal_returns_empty() -> None:
+def test_extract_refusal_raises_unavailable() -> None:
     client = MagicMock()
     client.chat.completions.parse.return_value = _parsed_completion(
         None,
@@ -193,17 +196,19 @@ def test_extract_refusal_returns_empty() -> None:
     )
     service = VisionService(client=client)
 
-    assert service.extract(_tiny_jpeg()) == ExtractedLabel()
+    with pytest.raises(VisionUnavailableError):
+        service.extract(_tiny_jpeg())
 
 
-def test_extract_malformed_parsed_object_returns_empty() -> None:
+def test_extract_malformed_parsed_object_raises_unavailable() -> None:
     client = MagicMock()
     client.chat.completions.parse.return_value = _parsed_completion(
         {"brand": {"not": "a string"}}
     )
     service = VisionService(client=client)
 
-    assert service.extract(_tiny_jpeg()) == ExtractedLabel()
+    with pytest.raises(VisionUnavailableError):
+        service.extract(_tiny_jpeg())
 
 
 def test_extract_malformed_parsed_object_does_not_log_label_text(
@@ -217,7 +222,8 @@ def test_extract_malformed_parsed_object_does_not_log_label_text(
     service = VisionService(client=client)
     caplog.set_level("WARNING", logger="app.vision.service")
 
-    assert service.extract(_tiny_jpeg()) == ExtractedLabel()
+    with pytest.raises(VisionUnavailableError):
+        service.extract(_tiny_jpeg())
 
     assert caplog.messages == [
         "vision parsed validation soft-fail: ValidationError"
@@ -225,9 +231,18 @@ def test_extract_malformed_parsed_object_does_not_log_label_text(
     assert sensitive_label_text not in caplog.text
 
 
-def test_extract_unusable_response_returns_empty() -> None:
+def test_extract_unusable_response_raises_unavailable() -> None:
     client = MagicMock()
     client.chat.completions.parse.return_value = SimpleNamespace(choices=[])
+    service = VisionService(client=client)
+
+    with pytest.raises(VisionUnavailableError):
+        service.extract(_tiny_jpeg())
+
+
+def test_extract_valid_all_null_response_remains_a_valid_extraction() -> None:
+    client = MagicMock()
+    client.chat.completions.parse.return_value = _parsed_completion(ExtractedLabel())
     service = VisionService(client=client)
 
     assert service.extract(_tiny_jpeg()) == ExtractedLabel()

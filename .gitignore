@@ -19,6 +19,9 @@ htmlcov/
 coverage.xml
 *.log
 
+# JavaScript development dependencies
+node_modules/
+
 # Credentials / keys
 *.pem
 credentials.json

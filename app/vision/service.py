@@ -49,6 +49,10 @@ _SOFT_API_ERRORS = (
 )
 
 
+class VisionUnavailableError(RuntimeError):
+    """Raised when extraction cannot produce a trustworthy provider result."""
+
+
 class VisionService:
     """Extract TTB label fields from an image.
 
@@ -84,9 +88,10 @@ class VisionService:
         image_bytes: bytes,
         content_type: str | None = None,  # noqa: ARG002 — reserved for callers
     ) -> ExtractedLabel:
-        """Return ExtractedLabel; never raises for bad photos / soft API failures.
+        """Return ExtractedLabel; never raises for locally invalid image bytes.
 
-        Misconfiguration (invalid API key) raises — that is not a bad-photo case.
+        Provider failures and misconfiguration raise so callers cannot mistake
+        an unavailable extraction for a label with seven missing fields.
         """
         try:
             jpeg_bytes = preprocess_image(image_bytes)
@@ -141,25 +146,33 @@ class VisionService:
             ) from exc
         except _SOFT_API_ERRORS as exc:
             logger.warning("vision API soft-fail: %s", type(exc).__name__)
-            return ExtractedLabel()
+            raise VisionUnavailableError(
+                "The vision provider could not complete extraction."
+            ) from exc
         except ValidationError as exc:
             logger.warning("vision structured parse soft-fail: %s", type(exc).__name__)
-            return ExtractedLabel()
+            raise VisionUnavailableError(
+                "The vision provider returned an invalid structured response."
+            ) from exc
 
         try:
             message = completion.choices[0].message
         except (AttributeError, IndexError, TypeError) as exc:
             logger.warning("vision response shape soft-fail: %s", exc)
-            return ExtractedLabel()
+            raise VisionUnavailableError(
+                "The vision provider returned an unusable response."
+            ) from exc
 
         parsed = getattr(message, "parsed", None)
         if parsed is None:
             refusal = getattr(message, "refusal", None)
             if refusal:
-                logger.warning("vision model refusal; returning empty ExtractedLabel")
+                logger.warning("vision model refusal")
             else:
                 logger.warning("vision response had no parsed structured output")
-            return ExtractedLabel()
+            raise VisionUnavailableError(
+                "The vision provider did not return an extraction."
+            )
 
         if isinstance(parsed, ExtractedLabel):
             return _normalize_empties(parsed)
@@ -171,7 +184,9 @@ class VisionService:
                 "vision parsed validation soft-fail: %s",
                 type(exc).__name__,
             )
-            return ExtractedLabel()
+            raise VisionUnavailableError(
+                "The vision provider returned an invalid extraction."
+            ) from exc
 
 
 def _normalize_empties(label: ExtractedLabel) -> ExtractedLabel:

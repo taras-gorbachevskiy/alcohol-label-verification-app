@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.body_limit import REQUEST_TOO_LARGE_MESSAGE
 from app.comparison import compare_labels
 from app.models import (
     ErrorDetail,
@@ -21,7 +22,7 @@ from app.models import (
     VerificationApplicationData,
     VerificationResult,
 )
-from app.vision import VisionService
+from app.vision import VisionService, VisionUnavailableError
 from app.vision.preprocess import (
     MAX_INPUT_BYTES,
     SUPPORTED_CONTENT_TYPES,
@@ -172,6 +173,15 @@ async def http_error_handler(
     request: Request,
     exc: StarletteHTTPException,
 ) -> JSONResponse:
+    if request.url.path == "/verify" and exc.status_code == 413:
+        return error_response(
+            request,
+            status_code=413,
+            code="REQUEST_TOO_LARGE",
+            message=REQUEST_TOO_LARGE_MESSAGE,
+            field=None,
+        )
+
     content_type = request.headers.get("content-type", "").lower()
     is_multipart_parse_error = (
         request.url.path == "/verify"
@@ -253,6 +263,13 @@ def _parse_application(application: str) -> VerificationApplicationData:
         location = first_error.get("loc", ())
         field_name = str(location[0]) if location else None
         field = f"application.{field_name}" if field_name else "application"
+        if first_error.get("type") == "string_too_long":
+            raise VerifyApiError(
+                422,
+                "APPLICATION_FIELD_TOO_LONG",
+                "Use 2,000 characters or fewer for each application field.",
+                field=field,
+            ) from exc
         raise VerifyApiError(
             422,
             "INVALID_APPLICATION",
@@ -324,22 +341,39 @@ def _preprocess_upload(image: UploadFile) -> bytes:
     response_model=VerificationResult,
     responses={
         400: {"model": ErrorResponse},
-        413: {"model": ErrorResponse},
+        413: {
+            "model": ErrorResponse,
+            "description": "Multipart request exceeds the 21 MiB total limit.",
+        },
         415: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
         500: {"model": ErrorResponse},
+        503: {
+            "model": ErrorResponse,
+            "description": "Vision provider or extraction is temporarily unavailable.",
+        },
     },
 )
 def verify_label(
     request: Request,
     image: Annotated[
         UploadFile,
-        File(description="JPEG, PNG, or WebP label image"),
+        File(
+            description=(
+                "JPEG, PNG, or WebP label image, maximum 20 MiB. "
+                "The complete multipart request is limited to 21 MiB."
+            )
+        ),
     ],
     application: Annotated[
         str,
-        Form(description="Application data as JSON"),
+        Form(
+            description=(
+                "JSON object with exactly seven required string fields; "
+                "maximum 2,000 characters per field."
+            )
+        ),
     ],
     vision_service_factory: Annotated[
         VisionServiceFactory,
@@ -369,6 +403,19 @@ def verify_label(
     try:
         extracted = vision_service_factory().extract_preprocessed(jpeg_bytes)
         result = compare_labels(application_data.to_application_data(), extracted)
+    except VisionUnavailableError as exc:
+        logger.warning(
+            "vision unavailable error_type=%s",
+            type(exc).__name__,
+        )
+        raise VerifyApiError(
+            503,
+            "VERIFICATION_UNAVAILABLE",
+            (
+                "We could not verify this label right now. "
+                "Your information is still here. Please try again."
+            ),
+        ) from exc
     except Exception as exc:
         logger.error(
             "verification service failure error_type=%s",

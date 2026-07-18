@@ -17,6 +17,7 @@ from app.api.verify import (
     unexpected_error_handler,
     verify_api_error_handler,
 )
+from app.body_limit import VerifyBodyLimitMiddleware
 from app.rate_limit import RateLimitSettings, VerifyRateLimiter, client_identifier
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -31,6 +32,7 @@ app.add_exception_handler(  # type: ignore[arg-type]
 )
 app.add_exception_handler(StarletteHTTPException, http_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unexpected_error_handler)
+app.add_middleware(VerifyBodyLimitMiddleware)
 
 
 @app.middleware("http")
