@@ -39,7 +39,7 @@ class RateLimitSettings:
     per_minute: int = 5
     per_hour: int = 30
     global_per_hour: int = 100
-    max_concurrent: int = 2
+    max_concurrent: int = 5
 
     @classmethod
     def from_env(cls) -> RateLimitSettings:
@@ -49,7 +49,7 @@ class RateLimitSettings:
             global_per_hour=_positive_env_int(
                 "VERIFY_GLOBAL_RATE_LIMIT_PER_HOUR", 100
             ),
-            max_concurrent=_positive_env_int("VERIFY_MAX_CONCURRENT", 2),
+            max_concurrent=_positive_env_int("VERIFY_MAX_CONCURRENT", 5),
         )
 
 
@@ -104,7 +104,15 @@ class VerifyRateLimiter:
         self._active_verifications = 0
         self._lock = threading.Lock()
 
-    def check_client(self, client_id: str) -> RateLimitDecision:
+    def check_client(
+        self,
+        client_id: str,
+        *,
+        cost: int = 1,
+        record: bool = True,
+    ) -> RateLimitDecision:
+        if cost <= 0:
+            raise ValueError("client rate-limit cost must be positive")
         now = self._clock()
         with self._lock:
             attempts = self._client_attempts.get(client_id)
@@ -127,7 +135,7 @@ class VerifyRateLimiter:
                 self._client_attempts.move_to_end(client_id)
 
             self._prune_deque(attempts, now - HOUR_SECONDS)
-            retry_after = self._client_retry_after_locked(attempts, now)
+            retry_after = self._client_retry_after_locked(attempts, now, cost)
             if retry_after:
                 return RateLimitDecision(
                     allowed=False,
@@ -136,8 +144,57 @@ class VerifyRateLimiter:
                     code="RATE_LIMITED",
                 )
 
-            attempts.append(now)
+            if record:
+                attempts.extend([now] * cost)
             return RateLimitDecision(allowed=True)
+
+    def acquire_processing_slots(
+        self,
+        count: int,
+    ) -> tuple[RateLimitDecision, list[VerificationLease]]:
+        """Atomically reserve bounded work slots without charging paid quota."""
+        if count <= 0:
+            raise ValueError("processing slot count must be positive")
+        with self._lock:
+            if self._active_verifications + count > self.settings.max_concurrent:
+                return (
+                    RateLimitDecision(
+                        allowed=False,
+                        retry_after=BUSY_RETRY_SECONDS,
+                        scope="concurrency",
+                        code="VERIFICATION_BUSY",
+                    ),
+                    [],
+                )
+            self._active_verifications += count
+        leases = [VerificationLease(self) for _ in range(count)]
+        return RateLimitDecision(allowed=True), leases
+
+    def charge_global(self, count: int) -> RateLimitDecision:
+        """Atomically charge the paid-call allowance for validated labels."""
+        if count <= 0:
+            raise ValueError("global rate-limit cost must be positive")
+        now = self._clock()
+        with self._lock:
+            self._prune_deque(self._global_attempts, now - HOUR_SECONDS)
+            if len(self._global_attempts) + count > self.settings.global_per_hour:
+                overflow = (
+                    len(self._global_attempts)
+                    + count
+                    - self.settings.global_per_hour
+                )
+                if overflow > len(self._global_attempts):
+                    deadline = now + HOUR_SECONDS
+                else:
+                    deadline = self._global_attempts[overflow - 1] + HOUR_SECONDS
+                return RateLimitDecision(
+                    allowed=False,
+                    retry_after=self._retry_after(deadline, now),
+                    scope="global",
+                    code="RATE_LIMITED",
+                )
+            self._global_attempts.extend([now] * count)
+        return RateLimitDecision(allowed=True)
 
     def acquire_verification(
         self,
@@ -203,16 +260,27 @@ class VerifyRateLimiter:
         self,
         attempts: deque[float],
         now: float,
+        cost: int,
     ) -> int:
         retry_deadlines: list[float] = []
-        if len(attempts) >= self.settings.per_hour:
-            retry_deadlines.append(attempts[0] + HOUR_SECONDS)
+        hour_overflow = len(attempts) + cost - self.settings.per_hour
+        if hour_overflow > 0:
+            if hour_overflow > len(attempts):
+                retry_deadlines.append(now + HOUR_SECONDS)
+            else:
+                retry_deadlines.append(attempts[hour_overflow - 1] + HOUR_SECONDS)
 
         minute_attempts = [
             timestamp for timestamp in attempts if timestamp > now - MINUTE_SECONDS
         ]
-        if len(minute_attempts) >= self.settings.per_minute:
-            retry_deadlines.append(minute_attempts[0] + MINUTE_SECONDS)
+        minute_overflow = len(minute_attempts) + cost - self.settings.per_minute
+        if minute_overflow > 0:
+            if minute_overflow > len(minute_attempts):
+                retry_deadlines.append(now + MINUTE_SECONDS)
+            else:
+                retry_deadlines.append(
+                    minute_attempts[minute_overflow - 1] + MINUTE_SECONDS
+                )
 
         if not retry_deadlines:
             return 0

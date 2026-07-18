@@ -58,7 +58,7 @@ function createPage(fetchImpl, { captureTimeout = false } = {}) {
     pretendToBeVisual: true,
   });
   const { window } = dom;
-  let timeoutCallback = null;
+  const timeoutCallbacks = [];
 
   window.fetch = fetchImpl;
   window.URL.createObjectURL = () => "blob:test-label";
@@ -67,8 +67,8 @@ function createPage(fetchImpl, { captureTimeout = false } = {}) {
   window.scrollTo = () => {};
   if (captureTimeout) {
     window.setTimeout = (callback) => {
-      timeoutCallback = callback;
-      return 1;
+      timeoutCallbacks.push(callback);
+      return timeoutCallbacks.length;
     };
     window.clearTimeout = () => {};
   }
@@ -78,11 +78,69 @@ function createPage(fetchImpl, { captureTimeout = false } = {}) {
     dom,
     window,
     document: window.document,
-    runTimeout() {
-      assert.ok(timeoutCallback, "request timeout was scheduled");
-      timeoutCallback();
+    runTimeout(index = 0) {
+      assert.ok(timeoutCallbacks[index], "request timeout was scheduled");
+      timeoutCallbacks[index]();
     },
   };
+}
+
+function batchPayload(items) {
+  const counts = { PASS: 0, NEEDS_REVIEW: 0, UNABLE_TO_VERIFY: 0 };
+  for (const item of items) {
+    counts[item.status] += 1;
+  }
+  return {
+    summary: {
+      passed: counts.PASS,
+      needs_review: counts.NEEDS_REVIEW,
+      unable_to_verify: counts.UNABLE_TO_VERIFY,
+      total: items.length,
+    },
+    items: items.map((item, index) => ({
+      index,
+      filename: `batch-label-${index + 1}.jpg`,
+      status: item.status,
+      result:
+        item.status === "UNABLE_TO_VERIFY"
+          ? null
+          : verificationPayload({
+              verdict: item.status,
+              failedField: item.status === "NEEDS_REVIEW" ? "brand" : null,
+            }),
+      error:
+        item.status === "UNABLE_TO_VERIFY"
+          ? {
+              code: item.code || "VERIFICATION_UNAVAILABLE",
+              message: "safe item error",
+              field: null,
+            }
+          : null,
+    })),
+    latency_ms: 640,
+  };
+}
+
+function openBatch(page) {
+  page.document.getElementById("batch-mode-button").click();
+  return [...page.document.querySelectorAll(".batch-card")];
+}
+
+function fillBatchCard(page, card, index) {
+  const cardId = card.dataset.cardId;
+  for (const key of FIELD_KEYS) {
+    page.document.getElementById(`batch-${cardId}-${key}`).value =
+      `batch ${index} ${key}`;
+  }
+  const file = new page.window.File([`jpeg-${index}`], `batch-label-${index}.jpg`, {
+    type: "image/jpeg",
+  });
+  const image = page.document.getElementById(`batch-${cardId}-image`);
+  Object.defineProperty(image, "files", {
+    configurable: true,
+    value: [file],
+  });
+  image.dispatchEvent(new page.window.Event("change", { bubbles: true }));
 }
 
 function fillForm(page) {
@@ -343,3 +401,98 @@ for (const [name, payload] of Object.entries(invalidPayloads)) {
     page.dom.window.close();
   });
 }
+
+test("batch mode starts with two cards and is bounded at five", () => {
+  const page = createPage(async () => response({}));
+  let cards = openBatch(page);
+
+  assert.equal(page.document.getElementById("verification-form").hidden, true);
+  assert.equal(page.document.getElementById("batch-form").hidden, false);
+  assert.equal(cards.length, 2);
+  assert.equal(page.document.querySelectorAll(".remove-label-button:not([hidden])").length, 0);
+
+  page.document.getElementById("add-label-button").click();
+  page.document.getElementById("add-label-button").click();
+  page.document.getElementById("add-label-button").click();
+  cards = [...page.document.querySelectorAll(".batch-card")];
+  assert.equal(cards.length, 5);
+  assert.equal(page.document.getElementById("add-label-button").hidden, true);
+
+  cards[2].querySelector(".remove-label-button").click();
+  cards = [...page.document.querySelectorAll(".batch-card")];
+  assert.equal(cards.length, 4);
+  assert.deepEqual(
+    cards.map((card) => card.querySelector(".batch-card-title").textContent),
+    ["Label 1", "Label 2", "Label 3", "Label 4"],
+  );
+  page.dom.window.close();
+});
+
+test("batch submission preserves pairing and renders every drill-down", async () => {
+  let request = null;
+  const payload = batchPayload([
+    { status: "PASS" },
+    { status: "UNABLE_TO_VERIFY", code: "INVALID_IMAGE" },
+  ]);
+  const page = createPage(async (url, options) => {
+    request = { url, options };
+    return response(payload);
+  });
+  const cards = openBatch(page);
+  cards.forEach((card, index) => fillBatchCard(page, card, index + 1));
+
+  page.document.getElementById("batch-form").dispatchEvent(
+    new page.window.Event("submit", { bubbles: true, cancelable: true }),
+  );
+  await waitFor(() => !page.document.getElementById("batch-results").hidden);
+
+  assert.equal(request.url, "/verify/batch");
+  assert.equal(request.options.body.getAll("images").length, 2);
+  assert.equal(
+    JSON.parse(request.options.body.get("applications"))[1].brand,
+    "batch 2 brand",
+  );
+  assert.match(page.document.getElementById("batch-summary").textContent, /Passed\s*1/);
+  assert.match(
+    page.document.getElementById("batch-summary").textContent,
+    /Unable to verify\s*1/,
+  );
+  const details = page.document.querySelectorAll(".batch-result-item");
+  assert.equal(details.length, 2);
+  assert.equal(details[0].open, true);
+  assert.match(details[0].textContent, /Label 2/);
+  assert.match(details[1].textContent, /Label 1/);
+  assert.equal(page.document.activeElement, page.document.getElementById("batch-results"));
+
+  page.document.getElementById("edit-batch-button").click();
+  assert.equal(page.document.getElementById("batch-form").hidden, false);
+  assert.equal(cards[0].querySelector('input[type="file"]').files.length, 1);
+  page.dom.window.close();
+});
+
+test("batch progress appears only after the delay", async () => {
+  let resolveFetch;
+  const page = createPage(
+    () =>
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    { captureTimeout: true },
+  );
+  const cards = openBatch(page);
+  cards.forEach((card, index) => fillBatchCard(page, card, index + 1));
+
+  page.document.getElementById("batch-form").dispatchEvent(
+    new page.window.Event("submit", { bubbles: true, cancelable: true }),
+  );
+  await waitFor(() => page.document.getElementById("batch-submit-button").disabled);
+  assert.equal(page.document.getElementById("batch-progress").hidden, true);
+  page.runTimeout(1);
+  assert.equal(page.document.getElementById("batch-progress").hidden, false);
+  assert.match(page.document.getElementById("batch-progress").textContent, /Checking 2 labels/);
+
+  resolveFetch(response(batchPayload([{ status: "PASS" }, { status: "PASS" }])));
+  await waitFor(() => !page.document.getElementById("batch-results").hidden);
+  assert.equal(page.document.getElementById("batch-progress").hidden, true);
+  page.dom.window.close();
+});

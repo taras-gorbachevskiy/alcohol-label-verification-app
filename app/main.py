@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -6,6 +7,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.batch_verify import (
+    close_async_vision_service,
+    router as batch_verify_router,
+)
 from app.api.verify import (
     VerifyApiError,
     error_response,
@@ -22,9 +27,21 @@ from app.rate_limit import RateLimitSettings, VerifyRateLimiter, client_identifi
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="Alcohol Label Verification", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
+    yield
+    await close_async_vision_service()
+
+
+app = FastAPI(
+    title="Alcohol Label Verification",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 app.state.verify_limiter = VerifyRateLimiter(RateLimitSettings.from_env())
 app.include_router(verify_router)
+app.include_router(batch_verify_router)
 app.add_exception_handler(VerifyApiError, verify_api_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(  # type: ignore[arg-type]
     RequestValidationError,
@@ -37,12 +54,20 @@ app.add_middleware(VerifyBodyLimitMiddleware)
 
 @app.middleware("http")
 async def measure_verify_latency(request: Request, call_next):  # type: ignore[no-untyped-def]
-    if request.url.path != "/verify" or request.method != "POST":
+    if (
+        request.url.path not in {"/verify", "/verify/batch"}
+        or request.method != "POST"
+    ):
         return await call_next(request)
 
     start_verify_timer(request)
     limiter = request.app.state.verify_limiter
-    decision = limiter.check_client(client_identifier(request))
+    request.state.client_id = client_identifier(request)
+    # Record one attempt before multipart parsing for both endpoints. Batch
+    # verification charges any remaining per-label cost after its manifest is
+    # structurally valid, so malformed and oversized batches cannot bypass the
+    # client abuse limit.
+    decision = limiter.check_client(request.state.client_id)
     if not decision.allowed:
         request.state.rate_limit_scope = decision.scope
         response = error_response(

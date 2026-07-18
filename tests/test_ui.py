@@ -31,6 +31,21 @@ def test_single_label_page_has_required_controls() -> None:
     assert page.count('maxlength="2000"') == 7
 
 
+def test_page_has_accessible_batch_mode_and_results_controls() -> None:
+    response = client.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    assert 'id="single-mode-button"' in page
+    assert 'id="batch-mode-button"' in page
+    assert 'id="batch-form"' in page
+    assert 'id="add-label-button"' in page
+    assert 'id="batch-progress"' in page
+    assert 'aria-label="Batch verification in progress"' in page
+    assert 'id="batch-summary"' in page
+    assert 'id="batch-result-list"' in page
+
+
 def test_page_loads_static_assets() -> None:
     response = client.get("/")
 

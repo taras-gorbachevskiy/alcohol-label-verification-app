@@ -1,9 +1,10 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 FieldStatus = Literal["PASS", "FAIL"]
 Verdict = Literal["PASS", "NEEDS_REVIEW"]
+BatchItemStatus = Literal["PASS", "NEEDS_REVIEW", "UNABLE_TO_VERIFY"]
 MAX_APPLICATION_FIELD_CHARS = 2_000
 
 
@@ -74,3 +75,59 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
+
+
+class BatchSummary(BaseModel):
+    passed: int = Field(ge=0)
+    needs_review: int = Field(ge=0)
+    unable_to_verify: int = Field(ge=0)
+    total: int = Field(ge=1, le=5)
+
+    @model_validator(mode="after")
+    def require_complete_count(self) -> "BatchSummary":
+        if self.passed + self.needs_review + self.unable_to_verify != self.total:
+            raise ValueError("batch summary counts must add up to total")
+        return self
+
+
+class BatchItemResult(BaseModel):
+    index: int = Field(ge=0, le=4)
+    filename: str
+    status: BatchItemStatus
+    result: VerificationResult | None = None
+    error: ErrorDetail | None = None
+
+    @model_validator(mode="after")
+    def require_status_payload(self) -> "BatchItemResult":
+        if self.status == "UNABLE_TO_VERIFY":
+            if self.result is not None or self.error is None:
+                raise ValueError("unavailable batch items require only an error")
+            return self
+        if self.result is None or self.error is not None:
+            raise ValueError("verified batch items require only a result")
+        if self.result.verdict != self.status:
+            raise ValueError("batch item status must match result verdict")
+        return self
+
+
+class BatchVerificationResult(BaseModel):
+    summary: BatchSummary
+    items: list[BatchItemResult] = Field(min_length=1, max_length=5)
+    latency_ms: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def require_consistent_items(self) -> "BatchVerificationResult":
+        if len(self.items) != self.summary.total:
+            raise ValueError("batch item count must match summary total")
+        expected_indexes = list(range(len(self.items)))
+        if [item.index for item in self.items] != expected_indexes:
+            raise ValueError("batch items must be ordered by contiguous index")
+        counts = {
+            "PASS": self.summary.passed,
+            "NEEDS_REVIEW": self.summary.needs_review,
+            "UNABLE_TO_VERIFY": self.summary.unable_to_verify,
+        }
+        for status, expected in counts.items():
+            if sum(item.status == status for item in self.items) != expected:
+                raise ValueError("batch summary must match item statuses")
+        return self

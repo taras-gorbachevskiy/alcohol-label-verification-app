@@ -1,4 +1,4 @@
-"""Bound POST /verify bodies before multipart parsing can exhaust resources."""
+"""Bound verification request bodies before multipart parsing exhausts resources."""
 
 from __future__ import annotations
 
@@ -11,9 +11,16 @@ from app.vision.preprocess import MAX_INPUT_BYTES
 
 MULTIPART_ALLOWANCE_BYTES = 1024 * 1024
 MAX_VERIFY_REQUEST_BYTES = MAX_INPUT_BYTES + MULTIPART_ALLOWANCE_BYTES
+MAX_BATCH_ITEMS = 5
+MAX_BATCH_REQUEST_BYTES = (
+    MAX_BATCH_ITEMS * MAX_INPUT_BYTES + MULTIPART_ALLOWANCE_BYTES
+)
 
 REQUEST_TOO_LARGE_MESSAGE = (
     "The upload is too large. Choose a label photo smaller than 20 MB."
+)
+BATCH_REQUEST_TOO_LARGE_MESSAGE = (
+    "The batch is too large. Use no more than five label photos under 20 MB each."
 )
 INVALID_CONTENT_LENGTH_MESSAGE = (
     "The upload could not be read. Submit a label photo and all seven items again."
@@ -65,20 +72,31 @@ class VerifyBodyLimitMiddleware:
         app: ASGIApp,
         *,
         max_bytes: int = MAX_VERIFY_REQUEST_BYTES,
+        batch_max_bytes: int = MAX_BATCH_REQUEST_BYTES,
     ) -> None:
-        if max_bytes <= 0:
-            raise ValueError("max_bytes must be positive")
+        if max_bytes <= 0 or batch_max_bytes <= 0:
+            raise ValueError("request body limits must be positive")
         self.app = app
         self.max_bytes = max_bytes
+        self.batch_max_bytes = batch_max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if (
-            scope["type"] != "http"
-            or scope.get("path") != "/verify"
-            or scope.get("method") != "POST"
-        ):
+        path = scope.get("path")
+        is_verify_request = (
+            scope["type"] == "http"
+            and path in {"/verify", "/verify/batch"}
+            and scope.get("method") == "POST"
+        )
+        if not is_verify_request:
             await self.app(scope, receive, send)
             return
+
+        limit = self.batch_max_bytes if path == "/verify/batch" else self.max_bytes
+        too_large_message = (
+            BATCH_REQUEST_TOO_LARGE_MESSAGE
+            if path == "/verify/batch"
+            else REQUEST_TOO_LARGE_MESSAGE
+        )
 
         headers = scope.get("headers", [])
         try:
@@ -94,14 +112,14 @@ class VerifyBodyLimitMiddleware:
             )
             return
 
-        if declared_length is not None and declared_length > self.max_bytes:
+        if declared_length is not None and declared_length > limit:
             await _send_error(
                 scope,
                 receive,
                 send,
                 status_code=413,
                 code="REQUEST_TOO_LARGE",
-                message=REQUEST_TOO_LARGE_MESSAGE,
+                message=too_large_message,
             )
             return
 
@@ -112,7 +130,7 @@ class VerifyBodyLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
+                if received > limit:
                     raise VerifyBodyTooLarge()
             return message
 
