@@ -5,6 +5,7 @@ from app.models import (
     ApplicationData,
     ExtractedLabel,
     FieldResult,
+    VerificationApplicationData,
     VerificationResult,
 )
 
@@ -56,3 +57,20 @@ def test_verification_result_rejects_invalid_verdict() -> None:
             fields=[],
             latency_ms=0.0,
         )
+
+
+def test_verification_application_rejects_fields_over_2000_characters() -> None:
+    payload = {
+        "brand": "x" * 2_001,
+        "class_type": "Whiskey",
+        "producer": "Acme Distilling",
+        "country": "USA",
+        "abv": "45%",
+        "net_contents": "750 mL",
+        "government_warning": "GOVERNMENT WARNING: test",
+    }
+
+    with pytest.raises(ValidationError) as error:
+        VerificationApplicationData.model_validate(payload)
+
+    assert error.value.errors()[0]["type"] == "string_too_long"

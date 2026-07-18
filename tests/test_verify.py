@@ -13,8 +13,11 @@ from PIL import Image
 import app.api.verify as verify_module
 import app.vision.preprocess as preprocess_module
 from app.api.verify import get_vision_service_factory
+from app.body_limit import MAX_VERIFY_REQUEST_BYTES
 from app.main import app
 from app.models import ExtractedLabel
+from app.rate_limit import RateLimitSettings, VerifyRateLimiter
+from app.vision import VisionUnavailableError
 from tests.warning_fixtures import ALL_CAPS_WARNING, TITLE_CASE_WARNING
 
 
@@ -476,6 +479,130 @@ def test_verify_rejects_excessive_dimensions(
     mocked_vision.extract_preprocessed.assert_not_called()
 
 
+def test_verify_rejects_overlong_application_field_before_vision(
+    client: TestClient,
+    mocked_vision: MagicMock,
+) -> None:
+    response = _post(
+        client,
+        image_bytes=_image_bytes(),
+        application=_application(brand="x" * 2_001),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == {
+        "code": "APPLICATION_FIELD_TOO_LONG",
+        "message": "Use 2,000 characters or fewer for each application field.",
+        "field": "application.brand",
+    }
+    assert app.state.verify_limiter.snapshot().global_attempts == 0
+    mocked_vision.extract_preprocessed.assert_not_called()
+
+
+def test_verify_rejects_declared_request_over_21_mib_before_parsing(
+    client: TestClient,
+    mocked_vision: MagicMock,
+) -> None:
+    response = client.post(
+        "/verify",
+        content=b"not parsed",
+        headers={
+            "Content-Type": "multipart/form-data; boundary=unused",
+            "Content-Length": str(MAX_VERIFY_REQUEST_BYTES + 1),
+        },
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "REQUEST_TOO_LARGE"
+    assert app.state.verify_limiter.snapshot().global_attempts == 0
+    mocked_vision.extract_preprocessed.assert_not_called()
+
+
+def test_oversized_request_consumes_client_attempt_but_not_global_allowance(
+    client: TestClient,
+    mocked_vision: MagicMock,
+) -> None:
+    app.state.verify_limiter = VerifyRateLimiter(
+        RateLimitSettings(
+            per_minute=1,
+            per_hour=10,
+            global_per_hour=100,
+            max_concurrent=2,
+        )
+    )
+    headers = {
+        "X-Real-IP": "203.0.113.90",
+        "Content-Type": "multipart/form-data; boundary=unused",
+        "Content-Length": str(MAX_VERIFY_REQUEST_BYTES + 1),
+    }
+
+    oversized = client.post("/verify", content=b"not parsed", headers=headers)
+    limited = client.post(
+        "/verify",
+        content=b"not parsed",
+        headers={
+            "X-Real-IP": "203.0.113.90",
+            "Content-Type": "multipart/form-data; boundary=unused",
+        },
+    )
+
+    assert oversized.status_code == 413
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "RATE_LIMITED"
+    assert app.state.verify_limiter.snapshot().global_attempts == 0
+    mocked_vision.extract_preprocessed.assert_not_called()
+
+
+@pytest.mark.parametrize("content_length", ["not-a-number", "-1", "+1", " 1"])
+def test_verify_rejects_invalid_content_length(
+    client: TestClient,
+    mocked_vision: MagicMock,
+    content_length: str,
+) -> None:
+    response = client.post(
+        "/verify",
+        content=b"not parsed",
+        headers={
+            "Content-Type": "multipart/form-data; boundary=unused",
+            "Content-Length": content_length,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_MULTIPART"
+    assert app.state.verify_limiter.snapshot().global_attempts == 0
+    mocked_vision.extract_preprocessed.assert_not_called()
+
+
+def test_verify_rejects_streamed_request_over_21_mib(
+    client: TestClient,
+    mocked_vision: MagicMock,
+) -> None:
+    boundary = "stream-boundary"
+
+    def multipart_stream():  # type: ignore[no-untyped-def]
+        yield (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="image"; filename="label.jpg"\r\n'
+            "Content-Type: image/jpeg\r\n\r\n"
+        ).encode()
+        chunk = b"x" * (1024 * 1024)
+        for _ in range(22):
+            yield chunk
+        yield f"\r\n--{boundary}--\r\n".encode()
+
+    response = client.post(
+        "/verify",
+        content=multipart_stream(),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "REQUEST_TOO_LARGE"
+    assert app.state.verify_limiter.snapshot().global_attempts == 0
+    mocked_vision.extract_preprocessed.assert_not_called()
+
+
 def test_verify_service_failure_returns_generic_500_without_details(
     client: TestClient,
     mocked_vision: MagicMock,
@@ -495,6 +622,32 @@ def test_verify_service_failure_returns_generic_500_without_details(
     assert secret_detail not in caplog.text
     assert "traceback" not in caplog.text.lower()
     assert "error_type=RuntimeError" in caplog.text
+
+
+def test_verify_provider_outage_returns_readable_503_without_verdict(
+    client: TestClient,
+    mocked_vision: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret_detail = "provider-secret-detail"
+    mocked_vision.extract_preprocessed.side_effect = VisionUnavailableError(
+        secret_detail
+    )
+    caplog.set_level(logging.INFO, logger="uvicorn.error.app.verify")
+
+    response = _post(client, image_bytes=_image_bytes(), application=_application())
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "VERIFICATION_UNAVAILABLE"
+    assert "try again" in response.json()["error"]["message"].lower()
+    assert "verdict" not in response.json()
+    assert secret_detail not in response.text
+    assert secret_detail not in caplog.text
+    snapshot = app.state.verify_limiter.snapshot()
+    assert snapshot.global_attempts == 1
+    assert snapshot.active_verifications == 0
+    assert "status_code=503" in caplog.text
+    assert "error_code=VERIFICATION_UNAVAILABLE" in caplog.text
 
 
 def test_verify_returns_and_logs_deterministic_latency(

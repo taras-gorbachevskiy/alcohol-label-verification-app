@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 FieldStatus = Literal["PASS", "FAIL"]
 Verdict = Literal["PASS", "NEEDS_REVIEW"]
+MAX_APPLICATION_FIELD_CHARS = 2_000
 
 
 class ApplicationData(BaseModel):
@@ -21,13 +22,13 @@ class VerificationApplicationData(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    brand: str
-    class_type: str
-    producer: str
-    country: str
-    abv: str
-    net_contents: str
-    government_warning: str
+    brand: str = Field(max_length=MAX_APPLICATION_FIELD_CHARS)
+    class_type: str = Field(max_length=MAX_APPLICATION_FIELD_CHARS)
+    producer: str = Field(max_length=MAX_APPLICATION_FIELD_CHARS)
+    country: str = Field(max_length=MAX_APPLICATION_FIELD_CHARS)
+    abv: str = Field(max_length=MAX_APPLICATION_FIELD_CHARS)
+    net_contents: str = Field(max_length=MAX_APPLICATION_FIELD_CHARS)
+    government_warning: str = Field(max_length=MAX_APPLICATION_FIELD_CHARS)
 
     @field_validator("*")
     @classmethod
