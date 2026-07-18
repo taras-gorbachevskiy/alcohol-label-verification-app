@@ -15,11 +15,14 @@ TTB label verification proof-of-concept. One FastAPI process, same-origin UI (no
 
 Entry points: `from app.comparison import compare_labels`, `from app.vision import VisionService`.
 
-**Phase 2 library:** preprocess image (JPEG ≤1536px) → OpenAI `gpt-4o-mini` structured output → `ExtractedLabel`. Soft-fails to all-null on bad photos / timeouts / parse errors. Tests use an injected mock or `FakeVisionService` (no live API).
+**Phase 2 library:** orient, bound, and preprocess an image (JPEG ≤1536px) → OpenAI `gpt-4o-mini` typed structured output → `ExtractedLabel`. Bad photos, transient API failures, refusals, and parse errors soft-fail to all-null; configuration failures raise. Tests use an injected mock or `FakeVisionService` (no live API).
 
 ```bash
 # Live smoke against samples/sample_label.jpg (needs OPENAI_API_KEY in .env)
 uv run python scripts/extract_sample.py
+
+# Full opt-in accuracy/latency check, including degraded variants
+uv run python scripts/extract_sample.py --runs 3 --variants
 ```
 
 ## Prerequisites

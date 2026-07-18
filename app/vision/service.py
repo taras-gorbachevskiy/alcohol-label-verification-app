@@ -7,7 +7,20 @@ import logging
 import os
 from typing import Any
 
-from openai import APIError, APITimeoutError, AuthenticationError, OpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    ContentFilterFinishReasonError,
+    InternalServerError,
+    LengthFinishReasonError,
+    NotFoundError,
+    OpenAI,
+    PermissionDeniedError,
+    RateLimitError,
+    UnprocessableEntityError,
+)
 from pydantic import ValidationError
 
 from app.models import ExtractedLabel
@@ -18,6 +31,22 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_TIMEOUT_SECONDS = 4.0
+MAX_COMPLETION_TOKENS = 400
+
+_CONFIGURATION_ERRORS = (
+    BadRequestError,
+    NotFoundError,
+    PermissionDeniedError,
+    UnprocessableEntityError,
+)
+_SOFT_API_ERRORS = (
+    APIConnectionError,
+    APITimeoutError,
+    ContentFilterFinishReasonError,
+    InternalServerError,
+    LengthFinishReasonError,
+    RateLimitError,
+)
 
 
 class VisionService:
@@ -44,7 +73,11 @@ class VisionService:
                     "OPENAI_API_KEY is not set. Provide it via environment "
                     "or inject a client for tests."
                 )
-            self._client = OpenAI(api_key=api_key, timeout=timeout)
+            self._client = OpenAI(
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=0,
+            )
 
     def extract(
         self,
@@ -76,22 +109,31 @@ class VisionService:
                             {"type": "text", "text": USER_PROMPT},
                             {
                                 "type": "image_url",
-                                "image_url": {"url": data_url},
+                                "image_url": {
+                                    "url": data_url,
+                                    "detail": "high",
+                                },
                             },
                         ],
                     },
                 ],
                 response_format=ExtractedLabel,
+                max_completion_tokens=MAX_COMPLETION_TOKENS,
             )
         except AuthenticationError as exc:
             raise RuntimeError(
                 "OpenAI authentication failed. Check OPENAI_API_KEY."
             ) from exc
-        except (APITimeoutError, APIError, ValidationError, TypeError, ValueError) as exc:
-            logger.warning("vision API/parse soft-fail: %s", exc)
+        except _CONFIGURATION_ERRORS as exc:
+            raise RuntimeError(
+                "OpenAI vision request configuration failed. "
+                "Check OPENAI_VISION_MODEL and request settings."
+            ) from exc
+        except _SOFT_API_ERRORS as exc:
+            logger.warning("vision API soft-fail: %s", type(exc).__name__)
             return ExtractedLabel()
-        except Exception as exc:  # noqa: BLE001 — soft-fail contract
-            logger.warning("vision unexpected soft-fail: %s", exc)
+        except ValidationError as exc:
+            logger.warning("vision structured parse soft-fail: %s", type(exc).__name__)
             return ExtractedLabel()
 
         try:
@@ -102,6 +144,11 @@ class VisionService:
 
         parsed = getattr(message, "parsed", None)
         if parsed is None:
+            refusal = getattr(message, "refusal", None)
+            if refusal:
+                logger.warning("vision model refusal; returning empty ExtractedLabel")
+            else:
+                logger.warning("vision response had no parsed structured output")
             return ExtractedLabel()
 
         if isinstance(parsed, ExtractedLabel):
