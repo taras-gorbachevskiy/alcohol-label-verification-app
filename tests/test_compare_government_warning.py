@@ -16,10 +16,12 @@ def test_correct_all_caps_warning_passes() -> None:
     assert result.score is None
 
 
-def test_warning_whitespace_and_newlines_pass() -> None:
+def test_warning_whitespace_and_newlines_fail_exact_match() -> None:
     wrapped = ALL_CAPS_WARNING.replace(". (2)", ".\n(2)")
     result = compare_government_warning(ALL_CAPS_WARNING, wrapped)
-    assert result.status == "PASS"
+    assert result.status == "FAIL"
+    assert result.expected == ALL_CAPS_WARNING
+    assert result.actual == wrapped
 
 
 def test_title_case_warning_fails_strict_case_sensitive() -> None:

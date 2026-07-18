@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 FieldStatus = Literal["PASS", "FAIL"]
 Verdict = Literal["PASS", "NEEDS_REVIEW"]
@@ -14,6 +14,30 @@ class ApplicationData(BaseModel):
     abv: str | None = None
     net_contents: str | None = None
     government_warning: str | None = None
+
+
+class VerificationApplicationData(BaseModel):
+    """Strict application payload accepted by the verification endpoint."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    brand: str
+    class_type: str
+    producer: str
+    country: str
+    abv: str
+    net_contents: str
+    government_warning: str
+
+    @field_validator("*")
+    @classmethod
+    def require_nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    def to_application_data(self) -> ApplicationData:
+        return ApplicationData(**self.model_dump())
 
 
 class ExtractedLabel(BaseModel):
@@ -38,3 +62,14 @@ class FieldResult(BaseModel):
 class VerificationResult(BaseModel):
     verdict: Verdict
     fields: list[FieldResult] = Field(default_factory=list)
+    latency_ms: float = Field(ge=0)
+
+
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+    field: str | None = None
+
+
+class ErrorResponse(BaseModel):
+    error: ErrorDetail

@@ -29,11 +29,6 @@ def prep_fuzzy(value: str) -> str:
     return _WHITESPACE_RE.sub(" ", value.strip()).casefold()
 
 
-def prep_warning(value: str) -> str:
-    """Whitespace-only normalize; preserve case for exact comparison."""
-    return _WHITESPACE_RE.sub(" ", value.strip())
-
-
 def parse_abv(value: str) -> float | None:
     """Extract the first percentage-like number; ignore proof parentheticals."""
     match = _ABV_RE.search(value)

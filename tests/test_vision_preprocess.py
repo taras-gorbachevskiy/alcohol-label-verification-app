@@ -88,3 +88,20 @@ def test_preprocess_rejects_corrupt_bytes() -> None:
 def test_preprocess_rejects_empty_bytes() -> None:
     with pytest.raises(ImagePreprocessError):
         preprocess_image(b"")
+
+
+def test_preprocess_accepts_matching_declared_content_type() -> None:
+    out = preprocess_image(_png_bytes(8, 8), content_type="image/png")
+    assert out.startswith(b"\xff\xd8\xff")
+
+
+def test_preprocess_rejects_declared_content_type_mismatch() -> None:
+    with pytest.raises(ImagePreprocessError) as exc_info:
+        preprocess_image(_png_bytes(8, 8), content_type="image/jpeg")
+    assert exc_info.value.reason == "image_type_mismatch"
+
+
+def test_preprocess_rejects_unsupported_declared_content_type() -> None:
+    with pytest.raises(ImagePreprocessError) as exc_info:
+        preprocess_image(_png_bytes(8, 8), content_type="application/octet-stream")
+    assert exc_info.value.reason == "unsupported_image_type"

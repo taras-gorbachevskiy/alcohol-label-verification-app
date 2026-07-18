@@ -22,6 +22,7 @@ class FakeVisionService:
         self._result = result if result is not None else ExtractedLabel()
         self._run_preprocess = run_preprocess
         self.calls: list[tuple[bytes, str | None]] = []
+        self.preprocessed_calls: list[bytes] = []
 
     def extract(
         self,
@@ -31,7 +32,13 @@ class FakeVisionService:
         self.calls.append((image_bytes, content_type))
         if self._run_preprocess:
             try:
-                preprocess_image(image_bytes)
+                jpeg_bytes = preprocess_image(image_bytes)
             except ImagePreprocessError:
                 return ExtractedLabel()
+        else:
+            jpeg_bytes = image_bytes
+        return self.extract_preprocessed(jpeg_bytes)
+
+    def extract_preprocessed(self, jpeg_bytes: bytes) -> ExtractedLabel:
+        self.preprocessed_calls.append(jpeg_bytes)
         return self._result

@@ -9,7 +9,6 @@ from app.comparison.normalize import (
     parse_abv,
     parse_net_contents_ml,
     prep_fuzzy,
-    prep_warning,
 )
 from app.models import FieldResult
 
@@ -139,13 +138,13 @@ def compare_net_contents(expected: str | None, actual: str | None) -> FieldResul
 
 
 def compare_government_warning(expected: str | None, actual: str | None) -> FieldResult:
-    """Exact, case-sensitive match after whitespace collapse only."""
+    """Exact, case-sensitive match with no normalization."""
     missing = _missing_result("government_warning", expected, actual)
     if missing is not None:
         return missing
 
     assert expected is not None and actual is not None
-    status = "PASS" if prep_warning(expected) == prep_warning(actual) else "FAIL"
+    status = "PASS" if expected == actual else "FAIL"
     return FieldResult(
         field="government_warning",
         status=status,
