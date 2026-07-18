@@ -63,10 +63,11 @@ async def measure_verify_latency(request: Request, call_next):  # type: ignore[n
     start_verify_timer(request)
     limiter = request.app.state.verify_limiter
     request.state.client_id = client_identifier(request)
-    decision = limiter.check_client(
-        request.state.client_id,
-        record=request.url.path != "/verify/batch",
-    )
+    # Record one attempt before multipart parsing for both endpoints. Batch
+    # verification charges any remaining per-label cost after its manifest is
+    # structurally valid, so malformed and oversized batches cannot bypass the
+    # client abuse limit.
+    decision = limiter.check_client(request.state.client_id)
     if not decision.allowed:
         request.state.rate_limit_scope = decision.scope
         response = error_response(

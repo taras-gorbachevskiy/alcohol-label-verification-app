@@ -194,6 +194,27 @@ async def _verify_prepared_item(
         lease.release()
 
 
+def _release_deferred_preparation(
+    task: asyncio.Task[tuple[VerificationApplicationData, bytes] | VerifyApiError],
+    *,
+    index: int,
+    deferred_indexes: set[int],
+    lease: Any,
+) -> None:
+    """Release a slot only after an abandoned preprocessing worker is done."""
+
+    if index not in deferred_indexes:
+        return
+    try:
+        task.result()
+    except BaseException:
+        # The item has already been reported as unavailable. Consume any task
+        # exception without exposing item data or producing an unhandled-task log.
+        pass
+    finally:
+        lease.release()
+
+
 def _batch_result(
     request: Request,
     items: list[BatchItemResult],
@@ -256,15 +277,22 @@ async def verify_batch(
 
     limiter = request.app.state.verify_limiter
     client_id = getattr(request.state, "client_id", client_identifier(request))
-    client_decision = limiter.check_client(client_id, cost=len(images))
-    if not client_decision.allowed:
-        request.state.rate_limit_scope = client_decision.scope
-        raise VerifyApiError(
-            429,
-            client_decision.code,
-            "Too many labels have been checked. Please wait and try again.",
-            headers={"Retry-After": str(client_decision.retry_after)},
+    # Middleware has already charged one attempt before multipart parsing. A
+    # structurally valid batch pays only the remaining per-label cost here.
+    remaining_client_cost = len(images) - 1
+    if remaining_client_cost:
+        client_decision = limiter.check_client(
+            client_id,
+            cost=remaining_client_cost,
         )
+        if not client_decision.allowed:
+            request.state.rate_limit_scope = client_decision.scope
+            raise VerifyApiError(
+                429,
+                client_decision.code,
+                "Too many labels have been checked. Please wait and try again.",
+                headers={"Retry-After": str(client_decision.retry_after)},
+            )
 
     decision, leases = limiter.acquire_processing_slots(len(images))
     if not decision.allowed:
@@ -280,26 +308,40 @@ async def verify_batch(
     filenames = [_filename(image, index) for index, image in enumerate(images)]
     item_results: list[BatchItemResult | None] = [None] * len(images)
     valid: list[tuple[int, VerificationApplicationData, bytes]] = []
+    preparation_tasks: list[
+        asyncio.Task[tuple[VerificationApplicationData, bytes] | VerifyApiError]
+    ] = []
+    deferred_preparation_indexes: set[int] = set()
 
     try:
         preparation_tasks = [
             asyncio.create_task(asyncio.to_thread(_prepare_item, image, application))
             for image, application in zip(images, manifest, strict=True)
         ]
+        for index, task in enumerate(preparation_tasks):
+            task.add_done_callback(
+                lambda completed, item_index=index: _release_deferred_preparation(
+                    completed,
+                    index=item_index,
+                    deferred_indexes=deferred_preparation_indexes,
+                    lease=leases[item_index],
+                )
+            )
         _done, pending = await asyncio.wait(
             preparation_tasks,
             timeout=max(0.0, deadline - _clock()),
         )
         if pending:
             request.state.batch_deadline_exceeded = True
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
 
         for index, task in enumerate(preparation_tasks):
             if task in pending:
+                deferred_preparation_indexes.add(index)
+                # The callback may already have run between asyncio.wait()
+                # returning and ownership being marked as deferred.
+                if task.done():
+                    leases[index].release()
                 item_results[index] = _unavailable_item(index, filenames[index])
-                leases[index].release()
                 continue
             item = task.result()
             if isinstance(item, VerifyApiError):
@@ -387,5 +429,14 @@ async def verify_batch(
             return JSONResponse(status_code=503, content=result.model_dump())
         return result
     finally:
-        for lease in leases:
-            lease.release()
+        # A cancelled request may leave preprocessing threads running. Hand
+        # those leases to their task callbacks; all other paths are safe to
+        # release immediately (leases are idempotent).
+        for index, task in enumerate(preparation_tasks):
+            if not task.done():
+                deferred_preparation_indexes.add(index)
+                if task.done():
+                    leases[index].release()
+        for index, lease in enumerate(leases):
+            if index not in deferred_preparation_indexes:
+                lease.release()

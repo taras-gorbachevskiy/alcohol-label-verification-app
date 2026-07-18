@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -217,6 +218,38 @@ def test_structural_pair_mismatch_rejects_the_request() -> None:
     assert service.calls == 0
 
 
+def test_structural_batch_failure_consumes_a_client_attempt() -> None:
+    app.state.verify_limiter = VerifyRateLimiter(
+        RateLimitSettings(
+            per_minute=1,
+            per_hour=10,
+            global_per_hour=100,
+            max_concurrent=5,
+        )
+    )
+    service = SequenceAsyncVision([])
+    app.dependency_overrides[get_async_vision_service_factory] = lambda: lambda: service
+
+    with TestClient(app) as client:
+        invalid = _post_batch(
+            client,
+            [_application(), _application()],
+            images=[_image_bytes()],
+            ip="203.0.113.121",
+        )
+        limited = _post_batch(
+            client,
+            [_application()],
+            ip="203.0.113.121",
+        )
+
+    assert invalid.status_code == 422
+    assert invalid.json()["error"]["code"] == "BATCH_PAIR_COUNT_MISMATCH"
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "RATE_LIMITED"
+    assert service.calls == 0
+
+
 def test_five_batch_items_start_concurrently_and_release_all_slots() -> None:
     class BlockingAsyncVision:
         def __init__(self) -> None:
@@ -330,7 +363,78 @@ def test_batch_deadline_cancels_unfinished_items_and_releases_slots(
     assert app.state.verify_limiter.snapshot().active_verifications == 0
 
 
+def test_preprocessing_past_deadline_retains_slots_until_workers_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.verify_limiter = VerifyRateLimiter(
+        RateLimitSettings(
+            per_minute=20,
+            per_hour=20,
+            global_per_hour=100,
+            max_concurrent=2,
+        )
+    )
+    original_prepare = batch_module._prepare_item
+    release_workers = threading.Event()
+    all_workers_entered = threading.Event()
+    entered = 0
+    entered_lock = threading.Lock()
+
+    def stalled_prepare(image, application):  # type: ignore[no-untyped-def]
+        nonlocal entered
+        with entered_lock:
+            entered += 1
+            if entered == 2:
+                all_workers_entered.set()
+        release_workers.wait(timeout=3)
+        return original_prepare(image, application)
+
+    monkeypatch.setattr(batch_module, "_prepare_item", stalled_prepare)
+    monkeypatch.setattr(batch_module, "BATCH_PROCESSING_DEADLINE_SECONDS", 0.1)
+    service = SequenceAsyncVision([])
+    app.dependency_overrides[get_async_vision_service_factory] = lambda: lambda: service
+
+    try:
+        with TestClient(app) as client:
+            timed_out = _post_batch(
+                client,
+                [_application(), _application()],
+                ip="203.0.113.122",
+            )
+
+            assert timed_out.status_code == 503
+            assert all_workers_entered.wait(timeout=1)
+            assert app.state.verify_limiter.snapshot().active_verifications == 2
+
+            busy = _post_batch(
+                client,
+                [_application()],
+                ip="203.0.113.123",
+            )
+            assert busy.status_code == 429
+            assert busy.json()["error"]["code"] == "VERIFICATION_BUSY"
+
+            release_workers.set()
+            wait_deadline = time.monotonic() + 2
+            while (
+                app.state.verify_limiter.snapshot().active_verifications
+                and time.monotonic() < wait_deadline
+            ):
+                time.sleep(0.01)
+            assert app.state.verify_limiter.snapshot().active_verifications == 0
+    finally:
+        release_workers.set()
+
+
 def test_batch_declared_body_limit_is_enforced_before_parsing() -> None:
+    app.state.verify_limiter = VerifyRateLimiter(
+        RateLimitSettings(
+            per_minute=1,
+            per_hour=10,
+            global_per_hour=100,
+            max_concurrent=5,
+        )
+    )
     service = SequenceAsyncVision([])
     app.dependency_overrides[get_async_vision_service_factory] = lambda: lambda: service
 
@@ -341,11 +445,22 @@ def test_batch_declared_body_limit_is_enforced_before_parsing() -> None:
             headers={
                 "Content-Type": "multipart/form-data; boundary=unused",
                 "Content-Length": str(MAX_BATCH_REQUEST_BYTES + 1),
+                "X-Real-IP": "203.0.113.124",
+            },
+        )
+        limited = client.post(
+            "/verify/batch",
+            content=b"not parsed",
+            headers={
+                "Content-Type": "multipart/form-data; boundary=unused",
+                "X-Real-IP": "203.0.113.124",
             },
         )
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "REQUEST_TOO_LARGE"
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "RATE_LIMITED"
     assert service.calls == 0
 
 
