@@ -3,128 +3,208 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Label Verification</title>
-    <style>
-      :root {
-        --bg: #f6f3ee;
-        --ink: #1c1917;
-        --muted: #57534e;
-        --ok: #166534;
-        --bad: #991b1b;
-        --panel: #ffffff;
-        --line: #d6d3d1;
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
-        color: var(--ink);
-        background:
-          radial-gradient(ellipse 80% 50% at 10% 0%, #e7e5e4 0%, transparent 55%),
-          radial-gradient(ellipse 60% 40% at 90% 20%, #d6d3d1 0%, transparent 50%),
-          var(--bg);
-        display: grid;
-        place-items: center;
-        padding: 2rem 1.25rem;
-      }
-      main {
-        width: min(36rem, 100%);
-      }
-      h1 {
-        margin: 0 0 0.35rem;
-        font-size: clamp(1.75rem, 4vw, 2.25rem);
-        letter-spacing: -0.02em;
-        font-weight: 700;
-      }
-      p {
-        margin: 0 0 1.5rem;
-        color: var(--muted);
-        font-size: 1.05rem;
-        line-height: 1.45;
-      }
-      button {
-        font: inherit;
-        font-size: 1rem;
-        padding: 0.7rem 1.1rem;
-        border: 1px solid var(--ink);
-        background: var(--ink);
-        color: var(--bg);
-        cursor: pointer;
-      }
-      button:hover {
-        opacity: 0.9;
-      }
-      button:disabled {
-        opacity: 0.55;
-        cursor: wait;
-      }
-      #result {
-        margin-top: 1.25rem;
-        padding: 1rem 1.1rem;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        min-height: 4.5rem;
-        white-space: pre-wrap;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 0.95rem;
-        line-height: 1.4;
-      }
-      #result.ok {
-        color: var(--ok);
-        border-color: #86efac;
-      }
-      #result.err {
-        color: var(--bad);
-        border-color: #fca5a5;
-      }
-    </style>
+    <meta name="theme-color" content="#12304a" />
+    <title>Check an Alcohol Label</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
   </head>
   <body>
-    <main>
-      <h1>Label Verification</h1>
-      <p>
-        Health check is live. Label comparison runs in the library and tests only
-        — not from this page yet.
-      </p>
-      <button id="check" type="button">Check health</button>
-      <pre id="result" aria-live="polite">Click “Check health” to load the response.</pre>
+    <header class="site-header">
+      <div class="page-width">
+        <p class="agency-name">Alcohol Label Verification</p>
+      </div>
+    </header>
+
+    <main class="page-width" id="main-content">
+      <div class="intro">
+        <h1>Check an Alcohol Label</h1>
+        <p>Choose a label photo, then enter what the label is supposed to say.</p>
+      </div>
+
+      <form id="verification-form" novalidate autocomplete="off">
+        <section
+          class="error-summary"
+          id="error-summary"
+          role="alert"
+          tabindex="-1"
+          hidden
+        >
+          <h2 id="error-summary-title">Check the information below</h2>
+          <p id="error-summary-message"></p>
+        </section>
+
+        <section class="card" aria-labelledby="photo-heading">
+          <div class="section-heading">
+            <span class="step-number" aria-hidden="true">1</span>
+            <div>
+              <h2 id="photo-heading">Choose label photo</h2>
+              <p>Most phone photos work. Use a JPG, PNG, or WebP under 20 MB.</p>
+            </div>
+          </div>
+
+          <div class="file-picker">
+            <input
+              class="file-input"
+              id="image"
+              name="image"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              aria-describedby="image-help image-error"
+              required
+            />
+            <label class="file-button" for="image">Choose Label Photo</label>
+            <p class="file-name" id="image-help" aria-live="polite">
+              No photo chosen
+            </p>
+          </div>
+          <p class="field-error" id="image-error" hidden></p>
+
+          <figure class="photo-preview" id="photo-preview" hidden>
+            <img id="preview-image" alt="Selected label photo" />
+            <figcaption>Selected label photo</figcaption>
+          </figure>
+        </section>
+
+        <section class="card" aria-labelledby="details-heading">
+          <div class="section-heading">
+            <span class="step-number" aria-hidden="true">2</span>
+            <div>
+              <h2 id="details-heading">What should the label say?</h2>
+              <p>Enter the information you expect to see on the label.</p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="brand">Brand name</label>
+            <p class="field-help" id="brand-help">For example: Riverbend Reserve</p>
+            <input
+              id="brand"
+              name="brand"
+              type="text"
+              aria-describedby="brand-help brand-error"
+              required
+            />
+            <p class="field-error" id="brand-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="class_type">Type of alcohol</label>
+            <p class="field-help" id="class_type-help">
+              For example: Kentucky Straight Bourbon Whiskey
+            </p>
+            <input
+              id="class_type"
+              name="class_type"
+              type="text"
+              aria-describedby="class_type-help class_type-error"
+              required
+            />
+            <p class="field-error" id="class_type-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="producer">Company shown on label</label>
+            <p class="field-help" id="producer-help">
+              The producer, distiller, brewer, winery, or bottler
+            </p>
+            <input
+              id="producer"
+              name="producer"
+              type="text"
+              aria-describedby="producer-help producer-error"
+              required
+            />
+            <p class="field-error" id="producer-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="country">Country of origin</label>
+            <p class="field-help" id="country-help">For example: United States</p>
+            <input
+              id="country"
+              name="country"
+              type="text"
+              aria-describedby="country-help country-error"
+              required
+            />
+            <p class="field-error" id="country-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="abv">Alcohol percentage (ABV)</label>
+            <p class="field-help" id="abv-help">For example: 45%</p>
+            <input
+              id="abv"
+              name="abv"
+              type="text"
+              inputmode="decimal"
+              aria-describedby="abv-help abv-error"
+              required
+            />
+            <p class="field-error" id="abv-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="net_contents">Bottle size</label>
+            <p class="field-help" id="net_contents-help">For example: 750 mL</p>
+            <input
+              id="net_contents"
+              name="net_contents"
+              type="text"
+              aria-describedby="net_contents-help net_contents-error"
+              required
+            />
+            <p class="field-error" id="net_contents-error" hidden></p>
+          </div>
+
+          <div class="field">
+            <label for="government_warning">Government warning text</label>
+            <p class="field-help important-help" id="government_warning-help">
+              Copy it exactly, including every word, capital letter, space, and
+              punctuation mark.
+            </p>
+            <textarea
+              id="government_warning"
+              name="government_warning"
+              rows="7"
+              aria-describedby="government_warning-help government_warning-error"
+              required
+            ></textarea>
+            <p class="field-error" id="government_warning-error" hidden></p>
+          </div>
+        </section>
+
+        <div class="action-bar">
+          <button class="primary-button" id="submit-button" type="submit">
+            <span class="button-spinner" aria-hidden="true"></span>
+            <span id="submit-button-text">Check Label</span>
+          </button>
+          <p class="loading-status" id="loading-status" role="status" hidden>
+            Checking the photo. This usually takes less than 5 seconds.
+          </p>
+        </div>
+      </form>
+
+      <section
+        class="results"
+        id="results"
+        aria-labelledby="results-title"
+        tabindex="-1"
+        hidden
+      >
+        <div class="verdict" id="verdict">
+          <p class="verdict-label">Verification result</p>
+          <h2 id="results-title"></h2>
+          <p id="verdict-summary"></p>
+        </div>
+
+        <h2 class="results-heading">Field results</h2>
+        <ul class="result-list" id="result-list"></ul>
+
+        <button class="secondary-button" id="start-over-button" type="button">
+          Check Another Label
+        </button>
+      </section>
     </main>
-    <script>
-      const button = document.getElementById("check");
-      const result = document.getElementById("result");
-
-      async function checkHealth() {
-        button.disabled = true;
-        result.className = "";
-        result.textContent = "Fetching /health …";
-        try {
-          // Relative URL keeps frontend and API same-origin (no CORS).
-          const response = await fetch("/health");
-          const text = await response.text();
-          let body = text;
-          try {
-            body = JSON.stringify(JSON.parse(text), null, 2);
-          } catch (_) {
-            /* keep raw text */
-          }
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}\n${body}`);
-          }
-          result.className = "ok";
-          result.textContent = body;
-        } catch (error) {
-          result.className = "err";
-          result.textContent = String(error.message || error);
-        } finally {
-          button.disabled = false;
-        }
-      }
-
-      button.addEventListener("click", checkHealth);
-      checkHealth();
-    </script>
   </body>
 </html>

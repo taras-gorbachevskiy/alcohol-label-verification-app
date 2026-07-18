@@ -64,12 +64,14 @@ class VerifyApiError(Exception):
         message: str,
         *,
         field: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(code)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.field = field
+        self.headers = headers
 
 
 def start_verify_timer(request: Request) -> None:
@@ -95,40 +97,47 @@ def log_verify_completion(request: Request, status_code: int) -> None:
     logger.log(
         level,
         "verify_complete status_code=%d latency_ms=%.2f within_budget=%s "
-        "verdict=%s error_code=%s",
+        "verdict=%s error_code=%s rate_limit_scope=%s",
         status_code,
         latency_ms,
         within_budget,
         getattr(request.state, "verify_verdict", "-"),
         getattr(request.state, "verify_error_code", "-"),
+        getattr(request.state, "rate_limit_scope", "-"),
     )
 
 
-def _error_response(
+def error_response(
     request: Request,
     *,
     status_code: int,
     code: str,
     message: str,
     field: str | None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     request.state.verify_error_code = code
     payload = ErrorResponse(
         error=ErrorDetail(code=code, message=message, field=field)
     )
-    return JSONResponse(status_code=status_code, content=payload.model_dump())
+    return JSONResponse(
+        status_code=status_code,
+        content=payload.model_dump(),
+        headers=headers,
+    )
 
 
 async def verify_api_error_handler(
     request: Request,
     exc: VerifyApiError,
 ) -> JSONResponse:
-    return _error_response(
+    return error_response(
         request,
         status_code=exc.status_code,
         code=exc.code,
         message=exc.message,
         field=exc.field,
+        headers=exc.headers,
     )
 
 
@@ -150,7 +159,7 @@ async def request_validation_error_handler(
     else:
         message = "Choose an image and provide application data before submitting."
         field = None
-    return _error_response(
+    return error_response(
         request,
         status_code=422,
         code="MISSING_SUBMISSION",
@@ -175,7 +184,7 @@ async def http_error_handler(
             content={"detail": exc.detail},
             headers=exc.headers,
         )
-    return _error_response(
+    return error_response(
         request,
         status_code=400,
         code="INVALID_MULTIPART",
@@ -193,7 +202,7 @@ async def unexpected_error_handler(
             "unexpected verify failure error_type=%s",
             type(exc).__name__,
         )
-        return _error_response(
+        return error_response(
             request,
             status_code=500,
             code="VERIFICATION_UNAVAILABLE",
@@ -318,6 +327,7 @@ def _preprocess_upload(image: UploadFile) -> bytes:
         413: {"model": ErrorResponse},
         415: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
         500: {"model": ErrorResponse},
     },
 )
@@ -339,6 +349,23 @@ def verify_label(
     application_data = _parse_application(application)
     jpeg_bytes = _preprocess_upload(image)
 
+    limiter = request.app.state.verify_limiter
+    decision, lease = limiter.acquire_verification()
+    if not decision.allowed:
+        request.state.rate_limit_scope = decision.scope
+        message = (
+            "The checker is busy. Please wait a few seconds and try again."
+            if decision.code == "VERIFICATION_BUSY"
+            else "Too many labels have been checked. Please wait and try again."
+        )
+        raise VerifyApiError(
+            429,
+            decision.code,
+            message,
+            headers={"Retry-After": str(decision.retry_after)},
+        )
+    assert lease is not None
+
     try:
         extracted = vision_service_factory().extract_preprocessed(jpeg_bytes)
         result = compare_labels(application_data.to_application_data(), extracted)
@@ -355,6 +382,8 @@ def verify_label(
                 "Please try again or contact support."
             ),
         ) from exc
+    finally:
+        lease.release()
 
     latency_ms = elapsed_verify_ms(request)
     result.latency_ms = latency_ms

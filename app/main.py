@@ -8,6 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.verify import (
     VerifyApiError,
+    error_response,
     http_error_handler,
     log_verify_completion,
     request_validation_error_handler,
@@ -16,10 +17,12 @@ from app.api.verify import (
     unexpected_error_handler,
     verify_api_error_handler,
 )
+from app.rate_limit import RateLimitSettings, VerifyRateLimiter, client_identifier
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="Alcohol Label Verification", version="0.1.0")
+app.state.verify_limiter = VerifyRateLimiter(RateLimitSettings.from_env())
 app.include_router(verify_router)
 app.add_exception_handler(VerifyApiError, verify_api_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(  # type: ignore[arg-type]
@@ -32,10 +35,27 @@ app.add_exception_handler(Exception, unexpected_error_handler)
 
 @app.middleware("http")
 async def measure_verify_latency(request: Request, call_next):  # type: ignore[no-untyped-def]
-    if request.url.path != "/verify":
+    if request.url.path != "/verify" or request.method != "POST":
         return await call_next(request)
 
     start_verify_timer(request)
+    limiter = request.app.state.verify_limiter
+    decision = limiter.check_client(client_identifier(request))
+    if not decision.allowed:
+        request.state.rate_limit_scope = decision.scope
+        response = error_response(
+            request,
+            status_code=429,
+            code=decision.code,
+            message=(
+                "Too many labels have been checked. Please wait and try again."
+            ),
+            field=None,
+            headers={"Retry-After": str(decision.retry_after)},
+        )
+        log_verify_completion(request, response.status_code)
+        return response
+
     try:
         response = await call_next(request)
     except Exception:
