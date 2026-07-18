@@ -18,8 +18,32 @@
     <main class="page-width" id="main-content">
       <div class="intro">
         <h1>Check an Alcohol Label</h1>
-        <p>Choose a label photo, then enter what the label is supposed to say.</p>
+        <p>Check one label or a batch of up to five labels.</p>
       </div>
+
+      <section class="mode-picker" aria-labelledby="mode-heading">
+        <h2 id="mode-heading">How many labels do you want to check?</h2>
+        <div class="mode-buttons">
+          <button
+            class="mode-button selected"
+            id="single-mode-button"
+            type="button"
+            aria-pressed="true"
+            aria-controls="verification-form"
+          >
+            Single label
+          </button>
+          <button
+            class="mode-button"
+            id="batch-mode-button"
+            type="button"
+            aria-pressed="false"
+            aria-controls="batch-form"
+          >
+            Batch
+          </button>
+        </div>
+      </section>
 
       <form id="verification-form" novalidate autocomplete="off">
         <section
@@ -192,6 +216,36 @@
         </div>
       </form>
 
+      <form id="batch-form" novalidate autocomplete="off" hidden>
+        <section
+          class="error-summary"
+          id="batch-error-summary"
+          role="alert"
+          tabindex="-1"
+          hidden
+        >
+          <h2 id="batch-error-title">Check the labels below</h2>
+          <p id="batch-error-message"></p>
+        </section>
+
+        <div id="batch-cards"></div>
+
+        <button class="secondary-button add-label-button" id="add-label-button" type="button">
+          + Add Another Label
+        </button>
+
+        <div class="action-bar">
+          <button class="primary-button" id="batch-submit-button" type="submit">
+            <span class="button-spinner" aria-hidden="true"></span>
+            <span id="batch-submit-text">Check Batch</span>
+          </button>
+          <div class="batch-progress" id="batch-progress" role="status" hidden>
+            <progress aria-label="Batch verification in progress"></progress>
+            <p id="batch-progress-text">Checking labels…</p>
+          </div>
+        </div>
+      </form>
+
       <section
         class="results"
         id="results"
@@ -211,6 +265,32 @@
         <button class="secondary-button" id="start-over-button" type="button">
           Check Another Label
         </button>
+      </section>
+
+      <section
+        class="results batch-results"
+        id="batch-results"
+        aria-labelledby="batch-results-title"
+        tabindex="-1"
+        hidden
+      >
+        <div class="batch-results-heading">
+          <p class="verdict-label">Batch verification result</p>
+          <h2 id="batch-results-title">Batch Summary</h2>
+        </div>
+
+        <dl class="summary-grid" id="batch-summary"></dl>
+        <h2 class="results-heading">Individual labels</h2>
+        <div class="batch-result-list" id="batch-result-list"></div>
+
+        <div class="batch-result-actions">
+          <button class="secondary-button" id="edit-batch-button" type="button">
+            Return to This Batch
+          </button>
+          <button class="secondary-button" id="new-batch-button" type="button">
+            Start a New Batch
+          </button>
+        </div>
       </section>
     </main>
   </body>

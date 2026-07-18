@@ -9,4 +9,6 @@ committed. 3. Working cadence: when I say PLAN, propose an approach and list fil
 write NO code. When I say REVIEW, critique that plan against the requirements and edge cases and
 finalize it. When I say EXECUTE, implement exactly the approved plan with tests, then tell me how
 to verify it. Keep scope to the current phase only. 4. Prefer correctness and clean structure
-over ambition. Confirm you understand these rules.
+over ambition.
+Create new branch for each phase.
+Confirm you understand these rules.

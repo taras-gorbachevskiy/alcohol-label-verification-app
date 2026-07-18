@@ -11,7 +11,7 @@ TTB label verification proof-of-concept. One FastAPI process, same-origin UI (no
 | Vision extraction (`VisionService`) | Done (Phase 2) — mocked tests and wired to `/verify` |
 | HTTP `POST /verify` | Done (Phase 3) — validated multipart orchestration |
 | Single-label UI at `/` | Done (Phase 4) — accessible upload, results, errors, and abuse protection |
-| Batch upload UI | Not built yet |
+| Batch API and UI | Done (Phase 5) — isolated, concurrent verification for up to five labels |
 
 **Phase 1 library:** compare typed application data vs an extracted label across brand, class/type, producer, country, ABV, net contents, and government warning. Fuzzy/normalized matching for most fields; **government warning is an exact, case-sensitive match**. Any field `FAIL` ⇒ overall verdict `NEEDS_REVIEW`.
 
@@ -48,6 +48,23 @@ and fixed submit control with the result and one “Check Another Label” actio
 preventing accidental duplicate paid calls. Upload, network, timeout, and
 service errors keep the user's entries in place and render as readable guidance.
 
+**Phase 5 batch verification:** `POST /verify/batch` accepts one to five ordered
+`images` parts plus an `applications` JSON array in the same order. Each label is
+validated and verified independently: a bad image, invalid application, timeout,
+or provider failure becomes an `UNABLE_TO_VERIFY` item while valid siblings
+continue. The response preserves input order and includes server-derived counts
+for passed, needs-review, unable-to-verify, and total items. The UI exposes this
+through a large Single label / Batch choice, numbered label cards, a delayed
+progress indicator, a batch summary, and an accessible drill-down for every item.
+
+Eligible labels run concurrently under a shared five-label process cap and a
+4.8-second server-processing deadline. There are no provider retries. A locally
+valid batch with at least one completed verification returns `200`; all-local
+item errors return a batch-shaped `422`, and a total provider/extraction failure
+returns a batch-shaped `503`. Structurally malformed batches use the normal error
+response. Each image remains limited to 20 MiB and a batch request is limited to
+101 MiB.
+
 ### Abuse protection
 
 `POST /verify` is always rate-limited before it can use the server-side OpenAI
@@ -58,7 +75,7 @@ key. The defaults are conservative for this public proof-of-concept:
 | `VERIFY_RATE_LIMIT_PER_MINUTE` | `5` | Maximum attempts per client IP in a rolling minute |
 | `VERIFY_RATE_LIMIT_PER_HOUR` | `30` | Maximum attempts per client IP in a rolling hour |
 | `VERIFY_GLOBAL_RATE_LIMIT_PER_HOUR` | `100` | Maximum validated vision attempts across the process in a rolling hour |
-| `VERIFY_MAX_CONCURRENT` | `2` | Maximum active vision requests in the process |
+| `VERIFY_MAX_CONCURRENT` | `5` | Maximum active label-processing slots in the process |
 
 Client limits run before multipart parsing. The global and concurrency limits
 run after validation but before `VisionService`, so bad submissions cannot use
@@ -73,7 +90,8 @@ long to wait.
 Limits are held in memory, reset on deploy, and apply per process. Production is
 currently one Railway replica. Before adding replicas, replace the limiter with
 a shared Redis-backed limit or put an application-layer WAF in front of Railway.
-Future batch upload must charge its quota per label, not merely per HTTP request.
+Batch requests charge client quota per submitted label and global paid-call quota
+only for labels that reach the vision provider.
 
 ```bash
 # Live smoke against samples/sample_label.jpg (needs OPENAI_API_KEY in .env)
@@ -147,12 +165,14 @@ docker compose up --build
 8. **Settings → Networking → Generate Domain** if the service has no domain.
 9. Exit check:
    - `https://<your-app>.up.railway.app/health` → `{"status":"ok"}`
-   - `https://<your-app>.up.railway.app/` → single-label form loads
+   - `https://<your-app>.up.railway.app/` → Single label and Batch modes load
    - Submit a label photo and all seven values → verdict and seven field results appear
    - Submit an unsupported or unreadable file → a plain-language error appears
    - Provider/extraction outage → readable `503 VERIFICATION_UNAVAILABLE`, not a verdict
    - Upload above the total request limit → readable `413 REQUEST_TOO_LARGE`
    - Exceed a limit → entries remain and a readable wait message appears
+   - Submit two batch labels with one unreadable image → the readable label still
+     receives a result and both labels remain individually viewable
 
 CLI alternative (if `railway` CLI is installed and logged in):
 

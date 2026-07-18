@@ -95,17 +95,36 @@ def log_verify_completion(request: Request, status_code: int) -> None:
 
     within_budget = latency_ms < LATENCY_BUDGET_MS
     level = logging.INFO if within_budget else logging.WARNING
-    logger.log(
-        level,
-        "verify_complete status_code=%d latency_ms=%.2f within_budget=%s "
-        "verdict=%s error_code=%s rate_limit_scope=%s",
-        status_code,
-        latency_ms,
-        within_budget,
-        getattr(request.state, "verify_verdict", "-"),
-        getattr(request.state, "verify_error_code", "-"),
-        getattr(request.state, "rate_limit_scope", "-"),
-    )
+    batch_summary = getattr(request.state, "batch_summary", None)
+    if request.url.path == "/verify/batch":
+        logger.log(
+            level,
+            "batch_verify_complete status_code=%d latency_ms=%.2f within_budget=%s "
+            "passed=%s needs_review=%s unable_to_verify=%s total=%s "
+            "deadline_exceeded=%s error_code=%s rate_limit_scope=%s",
+            status_code,
+            latency_ms,
+            within_budget,
+            getattr(batch_summary, "passed", "-"),
+            getattr(batch_summary, "needs_review", "-"),
+            getattr(batch_summary, "unable_to_verify", "-"),
+            getattr(batch_summary, "total", "-"),
+            getattr(request.state, "batch_deadline_exceeded", False),
+            getattr(request.state, "verify_error_code", "-"),
+            getattr(request.state, "rate_limit_scope", "-"),
+        )
+    else:
+        logger.log(
+            level,
+            "verify_complete status_code=%d latency_ms=%.2f within_budget=%s "
+            "verdict=%s error_code=%s rate_limit_scope=%s",
+            status_code,
+            latency_ms,
+            within_budget,
+            getattr(request.state, "verify_verdict", "-"),
+            getattr(request.state, "verify_error_code", "-"),
+            getattr(request.state, "rate_limit_scope", "-"),
+        )
 
 
 def error_response(
@@ -146,6 +165,14 @@ async def request_validation_error_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
+    if request.url.path == "/verify/batch":
+        return error_response(
+            request,
+            status_code=422,
+            code="MISSING_BATCH_SUBMISSION",
+            message="Provide label images and application data for the batch.",
+            field=None,
+        )
     fields = {
         str(error["loc"][-1])
         for error in exc.errors()
@@ -173,18 +200,23 @@ async def http_error_handler(
     request: Request,
     exc: StarletteHTTPException,
 ) -> JSONResponse:
-    if request.url.path == "/verify" and exc.status_code == 413:
+    if request.url.path in {"/verify", "/verify/batch"} and exc.status_code == 413:
+        message = (
+            "The batch is too large. Use no more than five photos under 20 MB each."
+            if request.url.path == "/verify/batch"
+            else REQUEST_TOO_LARGE_MESSAGE
+        )
         return error_response(
             request,
             status_code=413,
             code="REQUEST_TOO_LARGE",
-            message=REQUEST_TOO_LARGE_MESSAGE,
+            message=message,
             field=None,
         )
 
     content_type = request.headers.get("content-type", "").lower()
     is_multipart_parse_error = (
-        request.url.path == "/verify"
+        request.url.path in {"/verify", "/verify/batch"}
         and exc.status_code == 400
         and content_type.startswith("multipart/form-data")
     )
@@ -207,7 +239,7 @@ async def unexpected_error_handler(
     request: Request,
     exc: Exception,
 ) -> JSONResponse:
-    if request.url.path == "/verify":
+    if request.url.path in {"/verify", "/verify/batch"}:
         logger.error(
             "unexpected verify failure error_type=%s",
             type(exc).__name__,

@@ -1,7 +1,8 @@
+import asyncio
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from openai import (
@@ -21,7 +22,12 @@ from PIL import Image
 
 import app.vision.service as service_module
 from app.models import ExtractedLabel
-from app.vision import FakeVisionService, VisionService, VisionUnavailableError
+from app.vision import (
+    AsyncVisionService,
+    FakeVisionService,
+    VisionService,
+    VisionUnavailableError,
+)
 from app.vision.prompt import SYSTEM_PROMPT, USER_PROMPT
 from app.vision.service import MAX_COMPLETION_TOKENS
 from tests.warning_fixtures import ALL_CAPS_WARNING
@@ -319,6 +325,37 @@ def test_live_client_disables_retries_and_uses_four_second_timeout(
     monkeypatch.setattr(service_module, "OpenAI", client_factory)
 
     VisionService()
+
+    client_factory.assert_called_once_with(
+        api_key="test-key",
+        timeout=4.0,
+        max_retries=0,
+    )
+
+
+def test_async_extract_uses_structured_format() -> None:
+    client = MagicMock()
+    client.chat.completions.parse = AsyncMock(
+        return_value=_parsed_completion(_full_label())
+    )
+    service = AsyncVisionService(client=client)
+
+    result = asyncio.run(service.extract_preprocessed(_tiny_jpeg()))
+
+    assert result == _full_label()
+    kwargs = client.chat.completions.parse.await_args.kwargs
+    assert kwargs["response_format"] is ExtractedLabel
+    assert kwargs["max_completion_tokens"] == MAX_COMPLETION_TOKENS
+
+
+def test_async_live_client_disables_retries_and_uses_four_second_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    client_factory = MagicMock()
+    monkeypatch.setattr(service_module, "AsyncOpenAI", client_factory)
+
+    AsyncVisionService()
 
     client_factory.assert_called_once_with(
         api_key="test-key",

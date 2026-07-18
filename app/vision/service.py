@@ -10,6 +10,7 @@ from typing import Any
 from openai import (
     APIConnectionError,
     APITimeoutError,
+    AsyncOpenAI,
     AuthenticationError,
     BadRequestError,
     ContentFilterFinishReasonError,
@@ -187,6 +188,114 @@ class VisionService:
             raise VisionUnavailableError(
                 "The vision provider returned an invalid extraction."
             ) from exc
+
+
+class AsyncVisionService:
+    """Async structured extraction used by concurrent batch verification."""
+
+    def __init__(
+        self,
+        client: Any | None = None,
+        model: str | None = None,
+        *,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        self._model = model or os.environ.get("OPENAI_VISION_MODEL", DEFAULT_MODEL)
+        if client is not None:
+            self._client = client
+        else:
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "OPENAI_API_KEY is not set. Provide it via environment "
+                    "or inject a client for tests."
+                )
+            self._client = AsyncOpenAI(
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=0,
+            )
+
+    async def extract_preprocessed(self, jpeg_bytes: bytes) -> ExtractedLabel:
+        data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode(
+            "ascii"
+        )
+        try:
+            completion = await self._client.chat.completions.parse(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": USER_PROMPT},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": data_url,
+                                    "detail": "high",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                response_format=ExtractedLabel,
+                max_completion_tokens=MAX_COMPLETION_TOKENS,
+            )
+        except AuthenticationError as exc:
+            raise RuntimeError(
+                "OpenAI authentication failed. Check OPENAI_API_KEY."
+            ) from exc
+        except _CONFIGURATION_ERRORS as exc:
+            raise RuntimeError(
+                "OpenAI vision request configuration failed. "
+                "Check OPENAI_VISION_MODEL and request settings."
+            ) from exc
+        except _SOFT_API_ERRORS as exc:
+            logger.warning("vision API soft-fail: %s", type(exc).__name__)
+            raise VisionUnavailableError(
+                "The vision provider could not complete extraction."
+            ) from exc
+        except ValidationError as exc:
+            logger.warning("vision structured parse soft-fail: %s", type(exc).__name__)
+            raise VisionUnavailableError(
+                "The vision provider returned an invalid structured response."
+            ) from exc
+
+        try:
+            message = completion.choices[0].message
+        except (AttributeError, IndexError, TypeError) as exc:
+            logger.warning("vision response shape soft-fail: %s", exc)
+            raise VisionUnavailableError(
+                "The vision provider returned an unusable response."
+            ) from exc
+        parsed = getattr(message, "parsed", None)
+        if parsed is None:
+            logger.warning(
+                "vision model refusal"
+                if getattr(message, "refusal", None)
+                else "vision response had no parsed structured output"
+            )
+            raise VisionUnavailableError(
+                "The vision provider did not return an extraction."
+            )
+        if isinstance(parsed, ExtractedLabel):
+            return _normalize_empties(parsed)
+        try:
+            return _normalize_empties(ExtractedLabel.model_validate(parsed))
+        except ValidationError as exc:
+            logger.warning(
+                "vision parsed validation soft-fail: %s",
+                type(exc).__name__,
+            )
+            raise VisionUnavailableError(
+                "The vision provider returned an invalid extraction."
+            ) from exc
+
+    async def aclose(self) -> None:
+        close = getattr(self._client, "close", None)
+        if close is not None:
+            await close()
 
 
 def _normalize_empties(label: ExtractedLabel) -> ExtractedLabel:
