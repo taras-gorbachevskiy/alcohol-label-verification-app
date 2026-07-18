@@ -54,4 +54,5 @@ def test_verification_result_rejects_invalid_verdict() -> None:
         VerificationResult(
             verdict="PARTIAL",  # type: ignore[arg-type]
             fields=[],
+            latency_ms=0.0,
         )

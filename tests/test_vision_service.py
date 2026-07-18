@@ -84,6 +84,21 @@ def test_extract_happy_path_uses_structured_format() -> None:
     assert user_content[1]["image_url"]["detail"] == "high"
 
 
+def test_extract_preprocessed_skips_preprocessing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = MagicMock()
+    client.chat.completions.parse.return_value = _parsed_completion(_full_label())
+    service = VisionService(client=client)
+    preprocess = MagicMock(side_effect=AssertionError("must not preprocess twice"))
+    monkeypatch.setattr(service_module, "preprocess_image", preprocess)
+
+    result = service.extract_preprocessed(_tiny_jpeg())
+
+    assert result == _full_label()
+    preprocess.assert_not_called()
+
+
 def test_extract_partial_fields() -> None:
     client = MagicMock()
     partial = ExtractedLabel(brand="RIVERBEND RESERVE", government_warning=None)

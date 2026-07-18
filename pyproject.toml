@@ -9,6 +9,7 @@ dependencies = [
     "openai>=1.60.0",
     "pillow>=12.3.0",
     "pydantic>=2.0",
+    "python-multipart>=0.0.20",
     "rapidfuzz>=3.9.0",
     "uvicorn[standard]>=0.32.0",
 ]

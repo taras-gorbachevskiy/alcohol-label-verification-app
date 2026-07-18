@@ -94,6 +94,16 @@ class VisionService:
             logger.warning("image preprocess failed; returning empty ExtractedLabel")
             return ExtractedLabel()
 
+        return self.extract_preprocessed(jpeg_bytes)
+
+    def extract_preprocessed(self, jpeg_bytes: bytes) -> ExtractedLabel:
+        """Extract fields from validated, bounded JPEG bytes.
+
+        Callers are responsible for preprocessing before using this entry point.
+        The existing :meth:`extract` method remains the safe public convenience
+        API for unvalidated image bytes.
+        """
+
         data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode(
             "ascii"
         )

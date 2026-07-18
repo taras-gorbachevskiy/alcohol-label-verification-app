@@ -7,15 +7,32 @@ TTB label verification proof-of-concept. One FastAPI process, same-origin UI (no
 | Layer | Status |
 |-------|--------|
 | HTTP `/health` + hello page at `/` | Live (Phase 0 scaffold) |
-| Comparison library (`compare_labels`) | Done (Phase 1) — unit-tested, not wired to HTTP/UI |
-| Vision extraction (`VisionService`) | Done (Phase 2) — library + unit tests (mocked); not wired to HTTP/UI |
-| Verify API, batch upload UI | Not built yet |
+| Comparison library (`compare_labels`) | Done (Phase 1) — unit-tested and wired to `/verify` |
+| Vision extraction (`VisionService`) | Done (Phase 2) — mocked tests and wired to `/verify` |
+| HTTP `POST /verify` | Done (Phase 3) — validated multipart orchestration |
+| Batch upload UI | Not built yet |
 
 **Phase 1 library:** compare typed application data vs an extracted label across brand, class/type, producer, country, ABV, net contents, and government warning. Fuzzy/normalized matching for most fields; **government warning is an exact, case-sensitive match**. Any field `FAIL` ⇒ overall verdict `NEEDS_REVIEW`.
 
 Entry points: `from app.comparison import compare_labels`, `from app.vision import VisionService`.
 
 **Phase 2 library:** orient, bound, and preprocess an image (JPEG ≤1536px) → OpenAI `gpt-4o-mini` typed structured output → `ExtractedLabel`. Bad photos, transient API failures, refusals, and parse errors soft-fail to all-null; configuration failures raise. Tests use an injected mock or `FakeVisionService` (no live API).
+
+**Phase 3 API:** `POST /verify` accepts a JPEG, PNG, or WebP `image` plus an
+`application` JSON multipart field. All seven application fields are required.
+The response includes the overall verdict, all expected-vs-found field results,
+and measured `latency_ms`. Client upload errors return stable, human-readable
+4xx responses; stack traces are never returned.
+
+```bash
+curl -X POST http://127.0.0.1:8000/verify \
+  -F 'image=@samples/sample_label.jpg;type=image/jpeg' \
+  -F 'application={"brand":"OLD TOM DISTILLERY","class_type":"Kentucky Straight Bourbon Whiskey","producer":"Old Tom Distillery","country":"USA","abv":"45%","net_contents":"750 mL","government_warning":"GOVERNMENT WARNING: Example warning text"}'
+```
+
+Each `/verify` request writes a completion log containing the status, verdict or
+error code, measured latency, and whether it stayed below the 5-second budget.
+No application values, image bytes, or extracted label text are logged.
 
 ```bash
 # Live smoke against samples/sample_label.jpg (needs OPENAI_API_KEY in .env)
@@ -37,7 +54,7 @@ uv run python scripts/extract_sample.py --runs 3 --variants
 cd alcohol-label-verification-app
 uv sync
 cp .env.example .env
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --env-file .env
 ```
 
 Open:

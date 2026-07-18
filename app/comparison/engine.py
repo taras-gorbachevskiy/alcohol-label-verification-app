@@ -27,4 +27,5 @@ def compare_labels(
         ),
     ]
     verdict = "NEEDS_REVIEW" if any(f.status == "FAIL" for f in fields) else "PASS"
-    return VerificationResult(verdict=verdict, fields=fields)
+    # HTTP orchestration replaces this placeholder with total request latency.
+    return VerificationResult(verdict=verdict, fields=fields, latency_ms=0.0)
