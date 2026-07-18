@@ -8,11 +8,22 @@ TTB label verification proof-of-concept. One FastAPI process, same-origin UI (no
 |-------|--------|
 | HTTP `/health` + hello page at `/` | Live (Phase 0 scaffold) |
 | Comparison library (`compare_labels`) | Done (Phase 1) — unit-tested, not wired to HTTP/UI |
-| Verify API, AI/OCR extraction, batch upload UI | Not built yet |
+| Vision extraction (`VisionService`) | Done (Phase 2) — library + unit tests (mocked); not wired to HTTP/UI |
+| Verify API, batch upload UI | Not built yet |
 
 **Phase 1 library:** compare typed application data vs an extracted label across brand, class/type, producer, country, ABV, net contents, and government warning. Fuzzy/normalized matching for most fields; **government warning is an exact, case-sensitive match**. Any field `FAIL` ⇒ overall verdict `NEEDS_REVIEW`.
 
-Entry point: `from app.comparison import compare_labels`.
+Entry points: `from app.comparison import compare_labels`, `from app.vision import VisionService`.
+
+**Phase 2 library:** orient, bound, and preprocess an image (JPEG ≤1536px) → OpenAI `gpt-4o-mini` typed structured output → `ExtractedLabel`. Bad photos, transient API failures, refusals, and parse errors soft-fail to all-null; configuration failures raise. Tests use an injected mock or `FakeVisionService` (no live API).
+
+```bash
+# Live smoke against samples/sample_label.jpg (needs OPENAI_API_KEY in .env)
+uv run python scripts/extract_sample.py
+
+# Full opt-in accuracy/latency check, including degraded variants
+uv run python scripts/extract_sample.py --runs 3 --variants
+```
 
 ## Prerequisites
 
