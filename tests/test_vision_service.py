@@ -191,6 +191,25 @@ def test_extract_malformed_parsed_object_returns_empty() -> None:
     assert service.extract(_tiny_jpeg()) == ExtractedLabel()
 
 
+def test_extract_malformed_parsed_object_does_not_log_label_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sensitive_label_text = "DO-NOT-LOG-EXTRACTED-LABEL-TEXT"
+    client = MagicMock()
+    client.chat.completions.parse.return_value = _parsed_completion(
+        {"government_warning": {"raw": sensitive_label_text}}
+    )
+    service = VisionService(client=client)
+    caplog.set_level("WARNING", logger="app.vision.service")
+
+    assert service.extract(_tiny_jpeg()) == ExtractedLabel()
+
+    assert caplog.messages == [
+        "vision parsed validation soft-fail: ValidationError"
+    ]
+    assert sensitive_label_text not in caplog.text
+
+
 def test_extract_unusable_response_returns_empty() -> None:
     client = MagicMock()
     client.chat.completions.parse.return_value = SimpleNamespace(choices=[])

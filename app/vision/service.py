@@ -157,7 +157,10 @@ class VisionService:
         try:
             return _normalize_empties(ExtractedLabel.model_validate(parsed))
         except ValidationError as exc:
-            logger.warning("vision parsed validation soft-fail: %s", exc)
+            logger.warning(
+                "vision parsed validation soft-fail: %s",
+                type(exc).__name__,
+            )
             return ExtractedLabel()
 
 
