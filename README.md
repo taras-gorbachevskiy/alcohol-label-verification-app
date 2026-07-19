@@ -26,7 +26,8 @@ Try:
    stack trace).
 
 Public abuse controls may return HTTP `429` with a wait message if you submit
-quickly; that is expected. For local parity with the demo sample image, use
+quickly; that is expected. Demo photos and expected values live under
+[`app/static/demo/`](app/static/demo/). For a separate local sample image, use
 [`samples/sample_label.jpg`](samples/sample_label.jpg).
 
 ## What it checks
@@ -38,8 +39,8 @@ quickly; that is expected. For local parity with the demo sample image, use
 | ABV, net contents | Normalized numeric units |
 | Government warning | **Exact, case-sensitive** string match |
 
-Any field FAIL ⇒ overall verdict `NEEDS_REVIEW` (UI: Needs review). All PASS ⇒
-`PASS` (UI: Passed).
+Any field FAIL ⇒ overall verdict `NEEDS_REVIEW` (UI: Needs review). All fields
+PASS ⇒ overall `PASS` (UI: APPROVED).
 
 **Batch:** one to five ordered images + applications. Each label is validated
 and verified independently; a bad sibling becomes `UNABLE_TO_VERIFY` without
@@ -70,9 +71,10 @@ extracted label text. Measured stage and browser timings are in
   hard product requirement; one flow is simpler for non-technical users than
   mode switching, and still covers the single-label case.
 - **Edit pulls into compose, with dirty guards.** Edit removes a queued label
-  into the open form until Update Queue; Check is blocked while the form is
-  dirty or mid-edit. *Why:* Prevents silently dropping a label; keeps one
-  large form on screen for senior-friendly use.
+  into the open form until Update Queue or Cancel (Cancel puts the original
+  item back); Check is blocked while the form is dirty or mid-edit. *Why:*
+  Prevents silently dropping a label; keeps one large form on screen for
+  senior-friendly use.
 - **Inline demo seed.** “Load 3 demo labels” fills the queue from
   [`app/static/demo/`](app/static/demo/) (JSON + JPEGs). *Why:* Zero-instruction
   live demo; those assets ship with the Docker image (`COPY app`), while local

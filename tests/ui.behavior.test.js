@@ -372,7 +372,7 @@ test("three mixed labels render summary and drill-down", async () => {
     JSON.parse(request.options.body.get("applications"))[2].brand,
     "label 3 brand",
   );
-  assert.match(page.document.getElementById("summary").textContent, /Passed\s*1/);
+  assert.match(page.document.getElementById("summary").textContent, /APPROVED\s*1/);
   assert.match(page.document.getElementById("summary").textContent, /Needs review\s*1/);
   assert.match(
     page.document.getElementById("summary").textContent,
@@ -474,7 +474,7 @@ test("edit then check without update is blocked and keeps the draft", async () =
   assert.equal(page.document.getElementById("brand").value, "label 2 brand");
   assert.match(
     page.document.getElementById("error-summary").textContent,
-    /Update Queue or clear the form before checking/i,
+    /Update Queue or Cancel before checking/i,
   );
   page.dom.window.close();
 });
@@ -542,8 +542,46 @@ test("dirty compose blocks check until queued or cleared", async () => {
   assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
   assert.match(
     page.document.getElementById("error-summary").textContent,
-    /Add to Queue or clear the form before checking/i,
+    /Add to Queue or Cancel before checking/i,
   );
+  page.dom.window.close();
+});
+
+test("cancel restores an edited label to the queue", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+
+  page.document.querySelectorAll(".queue-edit")[1].click();
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.equal(page.document.getElementById("cancel-compose-button").hidden, false);
+
+  page.document.getElementById("brand").value = "discarded brand";
+  page.document.getElementById("cancel-compose-button").click();
+
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.equal(page.document.getElementById("brand").value, "");
+  assert.equal(page.document.getElementById("cancel-compose-button").hidden, true);
+  assert.equal(page.document.getElementById("add-to-queue-button").textContent, "Add to Queue");
+  const names = [...page.document.querySelectorAll(".queue-item-file")].map(
+    (node) => node.textContent,
+  );
+  assert.deepEqual(names, ["label-1.jpg", "label-2.jpg"]);
+  page.dom.window.close();
+});
+
+test("cancel clears a dirty compose without touching the queue", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  fillCompose(page, 2);
+  page.document.getElementById("brand").dispatchEvent(new page.window.Event("input"));
+
+  assert.equal(page.document.getElementById("cancel-compose-button").hidden, false);
+  page.document.getElementById("cancel-compose-button").click();
+
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.equal(page.document.getElementById("brand").value, "");
+  assert.equal(page.document.getElementById("cancel-compose-button").hidden, true);
   page.dom.window.close();
 });
 

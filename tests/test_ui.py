@@ -24,6 +24,7 @@ def test_queue_page_has_required_controls() -> None:
     assert 'type="file"' in page
     assert 'accept="image/jpeg,image/png,image/webp"' in page
     assert 'id="add-to-queue-button"' in page
+    assert 'id="cancel-compose-button"' in page
     assert "Add to Queue" in page
     assert 'id="load-demo-button"' in page
     assert "Load 3 demo labels" in page

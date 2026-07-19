@@ -224,9 +224,17 @@ h1 {
   margin: 0;
 }
 
-.compose-card > .secondary-button {
-  width: 100%;
+.compose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   margin: 1.5rem 0 0;
+}
+
+.compose-actions .secondary-button {
+  flex: 1 1 12rem;
+  width: auto;
+  margin: 0;
 }
 
 .card,

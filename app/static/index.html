@@ -200,9 +200,19 @@
             <p class="field-error" id="government_warning-error" hidden></p>
           </div>
 
-          <button class="secondary-button" id="add-to-queue-button" type="button">
-            Add to Queue
-          </button>
+          <div class="compose-actions">
+            <button class="secondary-button" id="add-to-queue-button" type="button">
+              Add to Queue
+            </button>
+            <button
+              class="secondary-button"
+              id="cancel-compose-button"
+              type="button"
+              hidden
+            >
+              Cancel
+            </button>
+          </div>
           <p class="queue-limit-note" id="queue-limit-note" role="status" hidden>
             You already have five labels queued. Check them, or remove one to add
             another.

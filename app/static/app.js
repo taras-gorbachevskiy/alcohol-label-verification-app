@@ -76,6 +76,7 @@
   const composeStepNumber = document.getElementById("compose-step-number");
   const composeHeading = document.getElementById("compose-heading");
   const addToQueueButton = document.getElementById("add-to-queue-button");
+  const cancelComposeButton = document.getElementById("cancel-compose-button");
   const queueLimitNote = document.getElementById("queue-limit-note");
   const queuePanel = document.getElementById("queue-panel");
   const queueList = document.getElementById("queue-list");
@@ -102,6 +103,8 @@
   let editingId = null;
   /** @type {number | null} */
   let editingIndex = null;
+  /** @type {{ id: number, file: File, application: Record<string, string> } | null} */
+  let editingSnapshot = null;
   /** @type {File | null} */
   let composeFile = null;
   let demoLoading = false;
@@ -313,9 +316,11 @@
     imageHelp.textContent = "No photo chosen";
     editingId = null;
     editingIndex = null;
+    editingSnapshot = null;
     composeFile = null;
     composeHeading.textContent = "Add a label";
     addToQueueButton.textContent = "Add to Queue";
+    updateCancelButton();
   }
 
   function fillCompose(item) {
@@ -339,8 +344,35 @@
       imageHelp.textContent = "No photo chosen";
     }
     editingId = item.id;
+    editingSnapshot = item;
     composeHeading.textContent = "Edit label";
     addToQueueButton.textContent = "Update Queue";
+    updateCancelButton();
+  }
+
+  function updateCancelButton() {
+    const showCancel = composeIsDirty();
+    cancelComposeButton.hidden = !showCancel;
+    cancelComposeButton.disabled = checking || demoLoading;
+  }
+
+  function cancelCompose() {
+    if (checking || demoLoading) {
+      return;
+    }
+    if (editingSnapshot !== null) {
+      const index = Math.max(
+        0,
+        Math.min(editingIndex ?? queue.length, queue.length),
+      );
+      queue.splice(index, 0, editingSnapshot);
+    }
+    clearCompose();
+    hide(errorSummary);
+    renderQueue();
+    if (!composeCard.hidden) {
+      imageInput.focus();
+    }
   }
 
   function validateCompose() {
@@ -387,6 +419,7 @@
     checkButton.disabled = locked || queue.length < 1;
     checkButton.classList.toggle("is-loading", checking);
     addToQueueButton.disabled = locked;
+    updateCancelButton();
     loadDemoButton.classList.toggle("is-disabled", locked);
     loadDemoButton.setAttribute("aria-disabled", String(locked));
     if (locked) {
@@ -416,9 +449,9 @@
     if (composeIsDirty()) {
       showErrorSummary(
         "Finish the form first",
-        "Add to Queue or Update Queue, or clear the form, before editing another label.",
+        "Add to Queue, Update Queue, or Cancel before editing another label.",
       );
-      addToQueueButton.focus();
+      cancelComposeButton.focus();
       return;
     }
     editingIndex = index;
@@ -793,7 +826,7 @@
     title.append(makeTextElement("strong", "", `Label ${item.index + 1}`));
     title.append(makeTextElement("span", "batch-filename", item.filename));
     const labels = {
-      PASS: "✓ Passed",
+      PASS: "✓ APPROVED",
       NEEDS_REVIEW: "! Needs review",
       UNABLE_TO_VERIFY: "✕ Unable to verify",
     };
@@ -836,7 +869,7 @@
 
   function renderResults(payload) {
     summary.replaceChildren(
-      summaryItem("Passed", payload.summary.passed, "passed"),
+      summaryItem("APPROVED", payload.summary.passed, "passed"),
       summaryItem("Needs review", payload.summary.needs_review, "review"),
       ...(payload.summary.unable_to_verify
         ? [
@@ -1040,6 +1073,7 @@
       previewImage.src = previewUrl;
       show(photoPreview);
     }
+    updateCancelButton();
   });
 
   for (const field of FIELDS) {
@@ -1049,10 +1083,12 @@
         clearFieldError(field.key);
       }
       hide(errorSummary);
+      updateCancelButton();
     });
   }
 
   addToQueueButton.addEventListener("click", addCurrentToQueue);
+  cancelComposeButton.addEventListener("click", cancelCompose);
   loadDemoButton.addEventListener("click", (event) => {
     event.preventDefault();
     if (loadDemoButton.getAttribute("aria-disabled") === "true") {
@@ -1072,10 +1108,10 @@
       showErrorSummary(
         editingId !== null ? "Finish editing first" : "Finish the form first",
         editingId !== null
-          ? "Update Queue or clear the form before checking."
-          : "Add to Queue or clear the form before checking.",
+          ? "Update Queue or Cancel before checking."
+          : "Add to Queue or Cancel before checking.",
       );
-      addToQueueButton.focus();
+      cancelComposeButton.focus();
       return;
     }
     if (queue.length < 1) {
