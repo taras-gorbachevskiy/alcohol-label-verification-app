@@ -130,7 +130,7 @@ Successful single-label submissions expose the privacy-safe duration as the
 `data-click-to-result-ms` attribute on the result region.
 
 The deployed checklist, tuning decision, and measured stage/browser percentiles
-are recorded in [`docs/phase6-acceptance.md`](docs/phase6-acceptance.md).
+are recorded in [`docs/acceptance.md`](docs/acceptance.md).
 
 ## Prerequisites
 

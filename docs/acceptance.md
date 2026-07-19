@@ -1,7 +1,9 @@
-# Phase 6 acceptance record
+# Production acceptance record
 
 This record contains aggregate results only. It does not include image data,
 application values, or extracted label text.
+
+Captured during Phase 6 hardening against the deployed Railway service.
 
 ## Automated coverage
 

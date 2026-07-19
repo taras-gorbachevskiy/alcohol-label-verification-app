@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the Phase 6 acceptance checklist against a deployed service.
+"""Run the production acceptance checklist against a deployed service.
 
 The JSON report contains only case names, response statuses, verdicts, field
 statuses, and timings. It never contains expected/extracted label text or image
