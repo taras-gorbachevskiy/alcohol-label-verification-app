@@ -452,6 +452,151 @@ test("edit moves a queued label back into compose", () => {
   page.dom.window.close();
 });
 
+test("edit then check without update is blocked and keeps the draft", async () => {
+  let fetchCalls = 0;
+  const page = createPage(async () => {
+    fetchCalls += 1;
+    return response(batchPayload([{ status: "PASS" }, { status: "PASS" }]));
+  });
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+  addToQueue(page, 3);
+
+  page.document.querySelectorAll(".queue-edit")[1].click();
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.equal(page.document.getElementById("brand").value, "label 2 brand");
+
+  checkLabels(page);
+  await waitFor(() => !page.document.getElementById("error-summary").hidden);
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.equal(page.document.getElementById("brand").value, "label 2 brand");
+  assert.match(
+    page.document.getElementById("error-summary").textContent,
+    /Update Queue or clear the form before checking/i,
+  );
+  page.dom.window.close();
+});
+
+test("edit then edit another label is blocked and keeps the first draft", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+
+  page.document.querySelector(".queue-edit").click();
+  assert.equal(page.document.getElementById("brand").value, "label 1 brand");
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+
+  page.document.querySelector(".queue-edit").click();
+
+  assert.equal(page.document.getElementById("brand").value, "label 1 brand");
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.match(
+    page.document.getElementById("error-summary").textContent,
+    /before editing another label/i,
+  );
+  page.dom.window.close();
+});
+
+test("edit then update keeps the original queue order", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+  addToQueue(page, 3);
+
+  page.document.querySelectorAll(".queue-edit")[1].click();
+  const file = new page.window.File(["jpeg-mid"], "label-2-updated.jpg", {
+    type: "image/jpeg",
+  });
+  Object.defineProperty(page.document.getElementById("image"), "files", {
+    configurable: true,
+    value: [file],
+  });
+  page.document.getElementById("add-to-queue-button").click();
+
+  const names = [...page.document.querySelectorAll(".queue-item-file")].map(
+    (node) => node.textContent,
+  );
+  assert.deepEqual(names, [
+    "label-1.jpg",
+    "label-2-updated.jpg",
+    "label-3.jpg",
+  ]);
+  page.dom.window.close();
+});
+
+test("dirty compose blocks check until queued or cleared", async () => {
+  let fetchCalls = 0;
+  const page = createPage(async () => {
+    fetchCalls += 1;
+    return response(batchPayload([{ status: "PASS" }]));
+  });
+  addToQueue(page, 1);
+  fillCompose(page, 2);
+
+  checkLabels(page);
+  await waitFor(() => !page.document.getElementById("error-summary").hidden);
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.match(
+    page.document.getElementById("error-summary").textContent,
+    /Add to Queue or clear the form before checking/i,
+  );
+  page.dom.window.close();
+});
+
+test("demo load disables check until finished and replaces an existing queue", async () => {
+  let releaseManifest;
+  const page = createPage(async (url) => {
+    if (url === "/static/demo/scenarios.json") {
+      await new Promise((resolve) => {
+        releaseManifest = resolve;
+      });
+      return response(DEMO_SCENARIOS);
+    }
+    if (String(url).startsWith("/static/demo/")) {
+      return {
+        ok: true,
+        status: 200,
+        async blob() {
+          return new Blob([`bytes-for-${url}`], { type: "image/jpeg" });
+        },
+        async json() {
+          return {};
+        },
+        headers: {
+          get() {
+            return null;
+          },
+        },
+      };
+    }
+    return response(batchPayload([{ status: "PASS" }]));
+  });
+  addToQueue(page, 1);
+  assert.equal(page.document.getElementById("check-button").disabled, false);
+
+  page.document.getElementById("load-demo-button").click();
+  await waitFor(() => page.document.getElementById("check-button").disabled);
+  assert.equal(page.document.getElementById("add-to-queue-button").disabled, true);
+  assert.equal(typeof releaseManifest, "function");
+
+  releaseManifest();
+  await waitFor(
+    () => page.document.querySelectorAll(".queue-item").length === 3,
+  );
+
+  assert.match(
+    page.document.getElementById("demo-load-status").textContent,
+    /Replaced your queue with 3 demo labels/i,
+  );
+  assert.equal(page.document.getElementById("check-button").disabled, false);
+  assert.equal(page.document.getElementById("add-to-queue-button").disabled, false);
+  page.dom.window.close();
+});
+
 for (const testCase of [
   {
     name: "per-client rate limit",

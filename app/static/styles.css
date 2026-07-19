@@ -102,49 +102,39 @@ h1 {
   letter-spacing: -0.025em;
 }
 
+.intro-lead,
 .intro p {
-  max-width: 38rem;
+  max-width: 48rem;
   margin-bottom: 0;
   color: var(--muted);
   font-size: 1.25rem;
 }
 
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  border: 0;
+.intro-text-link {
+  color: var(--blue-dark);
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
   white-space: nowrap;
 }
 
-.demo-load {
-  margin-bottom: 1.5rem;
-  padding: 1.25rem 1.35rem;
-  border: 2px solid #c1c9d1;
-  border-radius: 0.75rem;
-  background: var(--surface);
-  box-shadow: var(--shadow);
+.intro-text-link:hover,
+.intro-text-link:focus-visible {
+  color: var(--blue);
 }
 
-.demo-load .secondary-button {
-  width: 100%;
-  margin: 0;
+.intro-text-link.is-disabled,
+.intro-text-link[aria-disabled="true"] {
+  color: #7a8794;
+  pointer-events: none;
+  cursor: not-allowed;
+  text-decoration: none;
 }
 
-.demo-load-help,
 .demo-load-status {
   margin: 0.85rem 0 0;
-  color: var(--muted);
-  font-weight: 700;
-}
-
-.demo-load-status {
   color: var(--navy-dark);
+  font-weight: 700;
 }
 
 .queue-panel {

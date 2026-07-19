@@ -19,25 +19,19 @@
     <main class="page-width" id="main-content">
       <div class="intro">
         <h1>Check Alcohol Labels</h1>
-        <p>Add one or more labels (up to five), then check them all at once.</p>
+        <p class="intro-lead">
+          Add one or more labels (up to five), then check them all at once.
+          <a
+            class="intro-text-link"
+            id="load-demo-button"
+            href="#queue-form"
+            >Load 3 demo labels</a
+          >
+        </p>
+        <p class="demo-load-status" id="demo-load-status" role="status" hidden></p>
       </div>
 
       <form id="queue-form" novalidate autocomplete="off">
-        <section
-          class="demo-load"
-          id="demo-load"
-          aria-labelledby="demo-load-heading"
-        >
-          <h2 id="demo-load-heading" class="visually-hidden">Try sample labels</h2>
-          <button class="secondary-button" id="load-demo-button" type="button">
-            Load 3 Demo Labels
-          </button>
-          <p class="demo-load-help" id="demo-load-help">
-            Fills the queue with three sample labels you can check right away.
-          </p>
-          <p class="demo-load-status" id="demo-load-status" role="status" hidden></p>
-        </section>
-
         <section
           class="error-summary"
           id="error-summary"

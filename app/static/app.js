@@ -100,7 +100,12 @@
   let nextQueueId = 1;
   let previewUrl = null;
   let editingId = null;
+  /** @type {number | null} */
+  let editingIndex = null;
+  /** @type {File | null} */
+  let composeFile = null;
   let demoLoading = false;
+  let checking = false;
 
   function hide(element) {
     element.hidden = true;
@@ -264,12 +269,51 @@
     return imageInput.files.length === 1;
   }
 
+  function currentComposeFile() {
+    return imageInput.files[0] || composeFile;
+  }
+
+  function composeIsDirty() {
+    if (editingId !== null) {
+      return true;
+    }
+    if (currentComposeFile()) {
+      return true;
+    }
+    return FIELDS.some((field) =>
+      document.getElementById(field.key).value.trim(),
+    );
+  }
+
+  function clearFileSelection() {
+    composeFile = null;
+    if (typeof DataTransfer !== "undefined") {
+      try {
+        imageInput.files = new DataTransfer().files;
+        return;
+      } catch (_error) {
+        // Some test doubles replace `files` with a plain value.
+      }
+    }
+    try {
+      Object.defineProperty(imageInput, "files", {
+        configurable: true,
+        value: [],
+      });
+    } catch (_error) {
+      // Browser reset already ran; leave best-effort cleanup.
+    }
+  }
+
   function clearCompose() {
     clearErrors();
     form.reset();
+    clearFileSelection();
     clearPreview();
     imageHelp.textContent = "No photo chosen";
     editingId = null;
+    editingIndex = null;
+    composeFile = null;
     composeHeading.textContent = "Add a label";
     addToQueueButton.textContent = "Add to Queue";
   }
@@ -280,7 +324,13 @@
       document.getElementById(field.key).value = item.application[field.key] || "";
     }
     clearPreview();
+    composeFile = item.file || null;
     if (setFileInput(item.file)) {
+      imageHelp.textContent = item.file.name;
+      previewUrl = URL.createObjectURL(item.file);
+      previewImage.src = previewUrl;
+      show(photoPreview);
+    } else if (item.file) {
       imageHelp.textContent = item.file.name;
       previewUrl = URL.createObjectURL(item.file);
       previewImage.src = previewUrl;
@@ -296,7 +346,7 @@
   function validateCompose() {
     clearErrors();
     const issues = [];
-    const imageMessage = fileValidationMessage(imageInput.files[0]);
+    const imageMessage = fileValidationMessage(currentComposeFile());
     if (imageMessage) {
       showFieldError("image", imageMessage);
       issues.push(imageInput);
@@ -331,11 +381,55 @@
     }
   }
 
+  function applyControlLock() {
+    const locked = checking || demoLoading;
+    form.setAttribute("aria-busy", String(checking));
+    checkButton.disabled = locked || queue.length < 1;
+    checkButton.classList.toggle("is-loading", checking);
+    addToQueueButton.disabled = locked;
+    loadDemoButton.classList.toggle("is-disabled", locked);
+    loadDemoButton.setAttribute("aria-disabled", String(locked));
+    if (locked) {
+      loadDemoButton.setAttribute("tabindex", "-1");
+    } else {
+      loadDemoButton.removeAttribute("tabindex");
+    }
+    imageInput.disabled = locked;
+    for (const field of FIELDS) {
+      document.getElementById(field.key).disabled = locked;
+    }
+    for (const button of queueList.querySelectorAll("button")) {
+      button.disabled = locked;
+    }
+    if (!checking) {
+      const count = queue.length;
+      checkButtonText.textContent =
+        count === 1 ? "Check 1 Label" : `Check ${count} Labels`;
+    }
+  }
+
   function updateCheckButton() {
-    const count = queue.length;
-    checkButton.disabled = count < 1;
-    checkButtonText.textContent =
-      count === 1 ? "Check 1 Label" : `Check ${count} Labels`;
+    applyControlLock();
+  }
+
+  function beginEdit(item, index) {
+    if (composeIsDirty()) {
+      showErrorSummary(
+        "Finish the form first",
+        "Add to Queue or Update Queue, or clear the form, before editing another label.",
+      );
+      addToQueueButton.focus();
+      return;
+    }
+    editingIndex = index;
+    queue = queue.filter((entry) => entry.id !== item.id);
+    fillCompose(item);
+    renderQueue();
+    show(composeCard);
+    hide(queueLimitNote);
+    hide(errorSummary);
+    imageInput.focus();
+    composeCard.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function renderQueue() {
@@ -369,13 +463,7 @@
       edit.type = "button";
       edit.setAttribute("aria-label", `Edit label ${index + 1}`);
       edit.addEventListener("click", () => {
-        queue = queue.filter((entry) => entry.id !== item.id);
-        fillCompose(item);
-        renderQueue();
-        show(composeCard);
-        hide(queueLimitNote);
-        imageInput.focus();
-        composeCard.scrollIntoView({ behavior: "smooth", block: "start" });
+        beginEdit(item, index);
       });
       const remove = makeTextElement(
         "button",
@@ -404,6 +492,9 @@
   }
 
   function addCurrentToQueue() {
+    if (demoLoading || checking) {
+      return;
+    }
     if (queue.length >= MAX_QUEUE && editingId === null) {
       showErrorSummary(
         "Queue is full",
@@ -415,12 +506,21 @@
     if (!validateCompose()) {
       return;
     }
+    const file = currentComposeFile();
     const entry = {
       id: editingId ?? nextQueueId++,
-      file: imageInput.files[0],
+      file,
       application: applicationPayload(),
     };
-    queue.push(entry);
+    if (editingId !== null) {
+      const index = Math.max(
+        0,
+        Math.min(editingIndex ?? queue.length, queue.length),
+      );
+      queue.splice(index, 0, entry);
+    } else {
+      queue.push(entry);
+    }
     clearCompose();
     renderQueue();
     hide(errorSummary);
@@ -768,25 +868,14 @@
   }
 
   function setLoading(isLoading) {
-    form.setAttribute("aria-busy", String(isLoading));
-    checkButton.disabled = isLoading || queue.length < 1;
-    checkButton.classList.toggle("is-loading", isLoading);
-    addToQueueButton.disabled = isLoading;
-    loadDemoButton.disabled = isLoading || demoLoading;
-    imageInput.disabled = isLoading;
-    for (const field of FIELDS) {
-      document.getElementById(field.key).disabled = isLoading;
-    }
-    for (const button of queueList.querySelectorAll("button")) {
-      button.disabled = isLoading;
-    }
+    checking = isLoading;
     if (isLoading) {
       checkButtonText.textContent =
         queue.length === 1 ? "Checking 1 Label…" : `Checking ${queue.length} Labels…`;
     } else {
-      updateCheckButton();
       hide(checkProgress);
     }
+    applyControlLock();
   }
 
   async function buildSubmission() {
@@ -827,6 +916,8 @@
     queue = [];
     nextQueueId = 1;
     editingId = null;
+    editingIndex = null;
+    composeFile = null;
     clearCompose();
     if (resultTiming) {
       resultTiming.textContent = "";
@@ -860,11 +951,12 @@
   }
 
   async function loadDemoLabels() {
-    if (demoLoading) {
+    if (demoLoading || checking) {
       return;
     }
+    const hadQueueItems = queue.length > 0;
     demoLoading = true;
-    loadDemoButton.disabled = true;
+    applyControlLock();
     hide(errorSummary);
     if (demoLoadStatus) {
       demoLoadStatus.textContent = "Loading sample labels…";
@@ -907,11 +999,16 @@
       }
       queue = entries;
       editingId = null;
+      editingIndex = null;
+      composeFile = null;
       clearCompose();
       hide(results);
+      demoLoading = false;
       renderQueue();
       if (demoLoadStatus) {
-        demoLoadStatus.textContent = `Loaded ${entries.length} demo labels.`;
+        demoLoadStatus.textContent = hadQueueItems
+          ? `Replaced your queue with ${entries.length} demo labels.`
+          : `Loaded ${entries.length} demo labels.`;
         show(demoLoadStatus);
       }
       checkButton.focus();
@@ -927,7 +1024,7 @@
       errorSummary.focus();
     } finally {
       demoLoading = false;
-      loadDemoButton.disabled = false;
+      applyControlLock();
     }
   }
 
@@ -935,7 +1032,8 @@
     clearFieldError("image");
     hide(errorSummary);
     clearPreview();
-    const file = imageInput.files[0];
+    const file = imageInput.files[0] || null;
+    composeFile = file;
     imageHelp.textContent = file ? file.name : "No photo chosen";
     if (file && SUPPORTED_IMAGE_TYPES.has(file.type) && file.size > 0) {
       previewUrl = URL.createObjectURL(file);
@@ -955,7 +1053,11 @@
   }
 
   addToQueueButton.addEventListener("click", addCurrentToQueue);
-  loadDemoButton.addEventListener("click", () => {
+  loadDemoButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (loadDemoButton.getAttribute("aria-disabled") === "true") {
+      return;
+    }
     void loadDemoLabels();
   });
 
@@ -963,6 +1065,19 @@
     event.preventDefault();
     const submittedAt = window.performance?.now?.() ?? Date.now();
     hide(errorSummary);
+    if (demoLoading) {
+      return;
+    }
+    if (composeIsDirty()) {
+      showErrorSummary(
+        editingId !== null ? "Finish editing first" : "Finish the form first",
+        editingId !== null
+          ? "Update Queue or clear the form before checking."
+          : "Add to Queue or clear the form before checking.",
+      );
+      addToQueueButton.focus();
+      return;
+    }
     if (queue.length < 1) {
       showErrorSummary(
         "Nothing to check yet",
@@ -970,11 +1085,6 @@
       );
       errorSummary.focus();
       return;
-    }
-    if (editingId !== null || imageInput.files[0] || FIELDS.some((field) =>
-      document.getElementById(field.key).value.trim(),
-    )) {
-      // Ignore incomplete compose leftovers; only queued labels are checked.
     }
 
     const count = queue.length;

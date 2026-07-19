@@ -16,7 +16,7 @@ preprocess ≤1280px at quality 82, measured warm click-to-result p95 about
 
 Try:
 
-1. Open the site → **Load 3 Demo Labels** → **Check 3 Labels** → read the
+1. Open the site → **Load 3 demo labels** (under the intro) → **Check 3 Labels** → read the
    summary and per-label drill-down (plus “Checked N labels in X seconds”).
 2. Or choose a label photo and enter the seven expected values → **Add to
    Queue** → **Check 1 Label** → read PASS/FAIL per field.
