@@ -216,6 +216,7 @@ test("successful verification replaces the form with one clear result action", a
   assert.equal(page.document.activeElement, results);
   assert.match(results.dataset.clickToResultMs, /^\d+$/);
   assert.match(results.textContent, /NEEDS REVIEW/);
+  assert.match(results.textContent, /Checked in \d+\.\d+ seconds\./);
   assert.match(results.textContent, /Brand name/);
   assert.match(results.textContent, /brand name does not match/i);
   assert.match(results.textContent, /Should say/);
@@ -249,6 +250,7 @@ test("all matching fields render a prominent approved verdict", async () => {
   const results = page.document.getElementById("results");
   assert.match(results.textContent, /APPROVED/);
   assert.match(results.textContent, /All 7 items match/);
+  assert.match(results.textContent, /Checked in \d+\.\d+ seconds\./);
   assert.equal(results.querySelectorAll(".result-item.pass").length, 7);
   assert.equal(page.document.getElementById("verification-form").hidden, true);
   page.dom.window.close();
@@ -484,12 +486,15 @@ test("batch submission preserves pairing and renders every drill-down", async ()
     page.document.getElementById("batch-summary").textContent,
     /Unable to verify\s*1/,
   );
+  const batchResults = page.document.getElementById("batch-results");
+  assert.match(batchResults.textContent, /Checked in \d+\.\d+ seconds\./);
+  assert.match(batchResults.dataset.clickToResultMs, /^\d+$/);
   const details = page.document.querySelectorAll(".batch-result-item");
   assert.equal(details.length, 2);
   assert.equal(details[0].open, true);
   assert.match(details[0].textContent, /Label 2/);
   assert.match(details[1].textContent, /Label 1/);
-  assert.equal(page.document.activeElement, page.document.getElementById("batch-results"));
+  assert.equal(page.document.activeElement, batchResults);
 
   page.document.getElementById("edit-batch-button").click();
   assert.equal(page.document.getElementById("batch-form").hidden, false);

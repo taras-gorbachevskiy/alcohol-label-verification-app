@@ -81,10 +81,27 @@
   const verdict = document.getElementById("verdict");
   const resultsTitle = document.getElementById("results-title");
   const verdictSummary = document.getElementById("verdict-summary");
+  const resultTiming = document.getElementById("result-timing");
   const resultList = document.getElementById("result-list");
   const startOverButton = document.getElementById("start-over-button");
 
   let previewUrl = null;
+
+  function formatDuration(ms) {
+    const seconds = Math.max(0, Number(ms) || 0) / 1000;
+    if (seconds < 10) {
+      return `${seconds.toFixed(1)} seconds`;
+    }
+    return `${Math.round(seconds)} seconds`;
+  }
+
+  function showTiming(element, ms) {
+    if (!element) {
+      return;
+    }
+    element.textContent = `Checked in ${formatDuration(ms)}.`;
+    show(element);
+  }
 
   function hide(element) {
     element.hidden = true;
@@ -524,6 +541,10 @@
     if (!results.hidden) {
       hide(results);
       resultList.replaceChildren();
+      if (resultTiming) {
+        resultTiming.textContent = "";
+        hide(resultTiming);
+      }
     }
   }
 
@@ -612,9 +633,9 @@
     clearErrors();
     renderResults(payload);
     const renderedAt = window.performance?.now?.() ?? Date.now();
-    results.dataset.clickToResultMs = String(
-      Math.max(0, Math.round(renderedAt - submittedAt)),
-    );
+    const clickToResultMs = Math.max(0, Math.round(renderedAt - submittedAt));
+    results.dataset.clickToResultMs = String(clickToResultMs);
+    showTiming(resultTiming, clickToResultMs);
     try {
       window.performance?.measure?.("single-label-click-to-result", {
         start: submittedAt,
@@ -651,6 +672,7 @@
   const batchErrorMessage = document.getElementById("batch-error-message");
   const batchResults = document.getElementById("batch-results");
   const batchSummary = document.getElementById("batch-summary");
+  const batchResultTiming = document.getElementById("batch-result-timing");
   const batchResultList = document.getElementById("batch-result-list");
   const editBatchButton = document.getElementById("edit-batch-button");
   const newBatchButton = document.getElementById("new-batch-button");
@@ -826,6 +848,10 @@
     batchCards.replaceChildren();
     batchSummary.replaceChildren();
     batchResultList.replaceChildren();
+    if (batchResultTiming) {
+      batchResultTiming.textContent = "";
+      hide(batchResultTiming);
+    }
     hide(batchErrorSummary);
     hide(batchResults);
     nextBatchCardId = 1;
@@ -1127,6 +1153,7 @@
 
   batchForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submittedAt = window.performance?.now?.() ?? Date.now();
     if (!validateBatch()) {
       return;
     }
@@ -1175,6 +1202,10 @@
     }
     hide(batchErrorSummary);
     renderBatchResults(payload);
+    const renderedAt = window.performance?.now?.() ?? Date.now();
+    const clickToResultMs = Math.max(0, Math.round(renderedAt - submittedAt));
+    batchResults.dataset.clickToResultMs = String(clickToResultMs);
+    showTiming(batchResultTiming, clickToResultMs);
   });
 
   editBatchButton.addEventListener("click", () => {

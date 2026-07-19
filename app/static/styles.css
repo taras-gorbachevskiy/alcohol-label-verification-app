@@ -508,10 +508,17 @@ textarea[aria-invalid="true"] {
   color: var(--review);
 }
 
-.verdict p:last-child {
+.verdict #verdict-summary {
   margin-bottom: 0;
   font-size: 1.2rem;
   font-weight: 700;
+}
+
+.result-timing {
+  margin: 0.85rem 0 0;
+  color: var(--navy-dark);
+  font-size: 1.15rem;
+  font-weight: 800;
 }
 
 .results-heading {
@@ -529,6 +536,10 @@ textarea[aria-invalid="true"] {
   margin-bottom: 0;
   color: var(--navy-dark);
   font-size: 2rem;
+}
+
+.batch-results-heading .result-timing {
+  margin-top: 0.65rem;
 }
 
 .summary-grid {
