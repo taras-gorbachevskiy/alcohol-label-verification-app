@@ -1,4 +1,5 @@
 from app.vision.fake import FakeVisionService
+from app.vision.postprocess import guard_warning_extraction, normalize_extracted_label
 from app.vision.service import (
     AsyncVisionService,
     VisionService,
@@ -10,4 +11,6 @@ __all__ = [
     "FakeVisionService",
     "VisionService",
     "VisionUnavailableError",
+    "guard_warning_extraction",
+    "normalize_extracted_label",
 ]

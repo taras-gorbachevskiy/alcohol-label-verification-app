@@ -23,6 +23,7 @@ from app.models import (
     VerificationResult,
 )
 from app.vision import VisionService, VisionUnavailableError
+from app.vision.postprocess import guard_warning_extraction, normalize_extracted_label
 from app.vision.preprocess import (
     MAX_INPUT_BYTES,
     SUPPORTED_CONTENT_TYPES,
@@ -66,18 +67,6 @@ def _cached_vision_service() -> VisionService:
 def get_vision_service_factory() -> VisionServiceFactory:
     """Inject a lazy factory so invalid requests do not require API setup."""
     return _cached_vision_service
-
-
-def _guard_warning_extraction(
-    application: VerificationApplicationData,
-    extracted: ExtractedLabel,
-) -> ExtractedLabel:
-    """Degrade altered warning OCR to missing instead of exposing guessed text."""
-
-    warning = extracted.government_warning
-    if warning is None or warning == application.government_warning:
-        return extracted
-    return extracted.model_copy(update={"government_warning": None})
 
 
 class VerifyApiError(Exception):
@@ -505,7 +494,11 @@ def verify_label(
     try:
         provider_started = _stage_clock()
         extracted = vision_service_factory().extract_preprocessed(jpeg_bytes)
-        extracted = _guard_warning_extraction(application_data, extracted)
+        extracted = normalize_extracted_label(extracted)
+        extracted = guard_warning_extraction(
+            application_data.government_warning,
+            extracted,
+        )
         request.state.provider_ms = round(
             max(0.0, (_stage_clock() - provider_started) * 1_000),
             2,

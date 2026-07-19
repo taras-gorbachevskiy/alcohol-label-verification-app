@@ -181,7 +181,7 @@ def test_verify_warning_failure_degrades_guessed_warning_to_missing(
     assert warning["actual"] is None
 
 
-def test_verify_warning_whitespace_change_fails_exact_match(
+def test_verify_warning_line_wrap_normalizes_before_guard(
     client: TestClient,
     mocked_vision: MagicMock,
 ) -> None:
@@ -198,10 +198,10 @@ def test_verify_warning_whitespace_change_fails_exact_match(
         for result in response.json()["fields"]
         if result["field"] == "government_warning"
     )
-    assert response.json()["verdict"] == "NEEDS_REVIEW"
-    assert warning["status"] == "FAIL"
+    assert response.json()["verdict"] == "PASS"
+    assert warning["status"] == "PASS"
     assert warning["expected"] == ALL_CAPS_WARNING
-    assert warning["actual"] is None
+    assert warning["actual"] == ALL_CAPS_WARNING
 
 
 def test_verify_soft_empty_extraction_returns_all_missing_failures(

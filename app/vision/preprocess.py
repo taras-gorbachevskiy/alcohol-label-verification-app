@@ -10,6 +10,9 @@ MAX_LONG_SIDE = 1280
 JPEG_QUALITY = 82
 MAX_INPUT_BYTES = 20 * 1024 * 1024
 MAX_INPUT_PIXELS = 50_000_000
+# Match the browser optimizer budget so client-preprocessed JPEGs are not
+# re-encoded a second time before the vision provider call.
+SKIP_REENCODE_MAX_BYTES = 1024 * 1024
 SUPPORTED_CONTENT_TYPES = {
     "image/jpeg": "JPEG",
     "image/png": "PNG",
@@ -25,6 +28,13 @@ class ImagePreprocessError(ValueError):
         self.reason = reason
 
 
+def _exif_orientation(image: Image.Image) -> int:
+    try:
+        return int(image.getexif().get(0x0112, 1) or 1)
+    except Exception:  # noqa: BLE001 - corrupt EXIF must not block preprocess
+        return 1
+
+
 def preprocess_image(
     data: bytes,
     content_type: str | None = None,
@@ -36,6 +46,9 @@ def preprocess_image(
 
     When ``content_type`` is supplied, enforce the endpoint's supported image
     formats and require the declared MIME type to match the decoded format.
+
+    Already-bounded upright JPEGs under 1 MiB are returned unchanged to avoid
+    a second lossy encode after browser-side optimization.
 
     Raises:
         ImagePreprocessError: corrupt or undecodable input.
@@ -81,6 +94,17 @@ def preprocess_image(
                 )
 
             image.load()
+            has_alpha = "A" in image.getbands() or "transparency" in image.info
+            orientation = _exif_orientation(image)
+            if (
+                decoded_format == "JPEG"
+                and not has_alpha
+                and orientation == 1
+                and max(width, height) <= max_long_side
+                and len(data) <= SKIP_REENCODE_MAX_BYTES
+            ):
+                return data
+
             oriented = ImageOps.exif_transpose(image)
             if "A" in oriented.getbands() or "transparency" in oriented.info:
                 rgba = oriented.convert("RGBA")

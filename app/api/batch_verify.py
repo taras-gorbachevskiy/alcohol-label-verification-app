@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse
 
 from app.api.verify import (
     VerifyApiError,
-    _guard_warning_extraction,
     _parse_application,
     _preprocess_upload,
     elapsed_verify_ms,
@@ -27,6 +26,7 @@ from app.models import (
     ExtractedLabel,
     VerificationApplicationData,
 )
+from app.vision.postprocess import guard_warning_extraction, normalize_extracted_label
 from app.rate_limit import client_identifier
 from app.vision import AsyncVisionService, VisionUnavailableError
 
@@ -198,7 +198,11 @@ async def _verify_prepared_item(
             service.extract_preprocessed(jpeg_bytes),
             timeout=timeout,
         )
-        extracted = _guard_warning_extraction(application, extracted)
+        extracted = normalize_extracted_label(extracted)
+        extracted = guard_warning_extraction(
+            application.government_warning,
+            extracted,
+        )
         result = compare_labels(application.to_application_data(), extracted)
         result.latency_ms = round(max(0.0, (_clock() - started_at) * 1_000), 2)
         return BatchItemResult(

@@ -25,6 +25,7 @@ from openai import (
 from pydantic import ValidationError
 
 from app.models import ExtractedLabel
+from app.vision.postprocess import normalize_extracted_label
 from app.vision.preprocess import ImagePreprocessError, preprocess_image
 from app.vision.prompt import SYSTEM_PROMPT, USER_PROMPT
 
@@ -173,10 +174,10 @@ class VisionService:
             )
 
         if isinstance(parsed, ExtractedLabel):
-            return _normalize_empties(parsed)
+            return normalize_extracted_label(parsed)
 
         try:
-            return _normalize_empties(ExtractedLabel.model_validate(parsed))
+            return normalize_extracted_label(ExtractedLabel.model_validate(parsed))
         except ValidationError as exc:
             logger.warning(
                 "vision parsed validation soft-fail: %s",
@@ -273,9 +274,9 @@ class AsyncVisionService:
                 "The vision provider did not return an extraction."
             )
         if isinstance(parsed, ExtractedLabel):
-            return _normalize_empties(parsed)
+            return normalize_extracted_label(parsed)
         try:
-            return _normalize_empties(ExtractedLabel.model_validate(parsed))
+            return normalize_extracted_label(ExtractedLabel.model_validate(parsed))
         except ValidationError as exc:
             logger.warning(
                 "vision parsed validation soft-fail: %s",
@@ -289,22 +290,6 @@ class AsyncVisionService:
         close = getattr(self._client, "close", None)
         if close is not None:
             await close()
-
-
-def _normalize_empties(label: ExtractedLabel) -> ExtractedLabel:
-    """Treat empty strings as missing and remove OCR layout line wrapping."""
-    data = label.model_dump()
-    for key, value in data.items():
-        if isinstance(value, str) and not value.strip():
-            data[key] = None
-    warning = data.get("government_warning")
-    if isinstance(warning, str):
-        # A printed line wrap is page layout, not a character in the warning.
-        # Preserve all other whitespace so exact comparison remains strict.
-        data["government_warning"] = warning.replace("\r\n", " ").replace(
-            "\r", " "
-        ).replace("\n", " ")
-    return ExtractedLabel(**data)
 
 
 def _messages(
