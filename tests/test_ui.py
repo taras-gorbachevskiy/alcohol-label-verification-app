@@ -136,3 +136,7 @@ def test_phase6_styles_keep_senior_friendly_size_focus_and_reflow() -> None:
     assert "width: min(100% - 1rem, 46rem)" in stylesheet
     assert ".queue-item" in stylesheet
     assert ".mode-picker" not in stylesheet
+    assert ".batch-card-heading" not in stylesheet
+    assert ".add-label-button" not in stylesheet
+    assert ".verdict.approved" not in stylesheet
+    assert ".loading-status" not in stylesheet

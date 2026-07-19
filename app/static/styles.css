@@ -351,31 +351,6 @@ summary:focus-visible,
   background: #dde3e9;
 }
 
-.photo-preview figcaption {
-  margin-top: 0.5rem;
-  color: var(--muted);
-  font-size: 1rem;
-}
-
-.batch-card-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
-}
-
-.batch-card-heading .section-heading {
-  align-items: center;
-  margin-bottom: 0;
-}
-
-.batch-card-heading h2 {
-  margin: 0;
-  color: var(--navy-dark);
-  font-size: 1.7rem;
-}
-
 .remove-label-button {
   min-height: 3rem;
   padding: 0.5rem 0.8rem;
@@ -386,22 +361,6 @@ summary:focus-visible,
   font: inherit;
   font-weight: 800;
   cursor: pointer;
-}
-
-.batch-photo-preview {
-  display: block;
-  width: 100%;
-  max-height: 18rem;
-  margin-top: 1rem;
-  border: 2px solid var(--border);
-  border-radius: 0.5rem;
-  object-fit: contain;
-  background: #dde3e9;
-}
-
-.add-label-button {
-  width: 100%;
-  margin: 0 0 8rem;
 }
 
 .field + .field {
@@ -528,15 +487,6 @@ textarea[aria-invalid="true"] {
   display: inline-block;
 }
 
-.loading-status {
-  width: min(44rem, 100%);
-  margin: 0.45rem auto 0;
-  color: var(--navy-dark);
-  font-size: 1rem;
-  font-weight: 700;
-  text-align: center;
-}
-
 .batch-progress {
   width: min(44rem, 100%);
   margin: 0.55rem auto 0;
@@ -559,45 +509,10 @@ textarea[aria-invalid="true"] {
   overflow: hidden;
 }
 
-.verdict {
-  padding: clamp(1.5rem, 5vw, 2.25rem);
-  border-bottom: 2px solid #c1c9d1;
-}
-
-.verdict.approved {
-  border-left: 0.65rem solid var(--success);
-  background: var(--success-bg);
-}
-
-.verdict.needs-review {
-  border-left: 0.65rem solid var(--review);
-  background: var(--review-bg);
-}
-
 .verdict-label {
   margin-bottom: 0.25rem;
   color: var(--muted);
   font-weight: 800;
-}
-
-.verdict h2 {
-  margin-bottom: 0.35rem;
-  font-size: clamp(2rem, 8vw, 3rem);
-  line-height: 1.05;
-}
-
-.verdict.approved h2 {
-  color: var(--success);
-}
-
-.verdict.needs-review h2 {
-  color: var(--review);
-}
-
-.verdict #verdict-summary {
-  margin-bottom: 0;
-  font-size: 1.2rem;
-  font-weight: 700;
 }
 
 .result-timing {

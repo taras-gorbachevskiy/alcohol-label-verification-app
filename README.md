@@ -38,8 +38,8 @@ quickly; that is expected. For local parity with the demo sample image, use
 | ABV, net contents | Normalized numeric units |
 | Government warning | **Exact, case-sensitive** string match |
 
-Any field FAIL ⇒ overall verdict `NEEDS_REVIEW` (UI: Needs Review). All PASS ⇒
-`PASS` (UI: Approved).
+Any field FAIL ⇒ overall verdict `NEEDS_REVIEW` (UI: Needs review). All PASS ⇒
+`PASS` (UI: Passed).
 
 **Batch:** one to five ordered images + applications. Each label is validated
 and verified independently; a bad sibling becomes `UNABLE_TO_VERIFY` without
@@ -144,8 +144,8 @@ scaling replicas.
 - Commit only [`.env.example`](.env.example) (with `OPENAI_API_KEY=` empty).
 - Real `.env` is gitignored—never stage it.
 - Production secrets live in the Railway Variables UI only.
-- The browser never receives `OPENAI_API_KEY`; it only calls same-origin
-  `/verify` and `/verify/batch`.
+- The browser never receives `OPENAI_API_KEY`; the UI only calls same-origin
+  `POST /verify/batch` (the single-label `POST /verify` API remains available).
 
 ## Project layout
 
