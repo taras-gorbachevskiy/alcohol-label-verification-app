@@ -2,6 +2,7 @@
   "use strict";
 
   const MAX_FILE_BYTES = 20 * 1024 * 1024;
+  const MAX_QUEUE = 5;
   const REQUEST_TIMEOUT_MS = 6_000;
   const CLIENT_MAX_LONG_SIDE = 1280;
   const CLIENT_JPEG_QUALITY = 0.82;
@@ -66,25 +67,51 @@
   ];
 
   const fieldByKey = new Map(FIELDS.map((field) => [field.key, field]));
-  const form = document.getElementById("verification-form");
+  const form = document.getElementById("queue-form");
   const imageInput = document.getElementById("image");
   const imageHelp = document.getElementById("image-help");
   const photoPreview = document.getElementById("photo-preview");
   const previewImage = document.getElementById("preview-image");
-  const submitButton = document.getElementById("submit-button");
-  const submitButtonText = document.getElementById("submit-button-text");
-  const loadingStatus = document.getElementById("loading-status");
+  const composeCard = document.getElementById("compose-card");
+  const composeStepNumber = document.getElementById("compose-step-number");
+  const composeHeading = document.getElementById("compose-heading");
+  const addToQueueButton = document.getElementById("add-to-queue-button");
+  const cancelComposeButton = document.getElementById("cancel-compose-button");
+  const queueLimitNote = document.getElementById("queue-limit-note");
+  const queuePanel = document.getElementById("queue-panel");
+  const queueList = document.getElementById("queue-list");
+  const checkButton = document.getElementById("check-button");
+  const checkButtonText = document.getElementById("check-button-text");
+  const checkProgress = document.getElementById("check-progress");
+  const checkProgressText = document.getElementById("check-progress-text");
   const errorSummary = document.getElementById("error-summary");
   const errorSummaryTitle = document.getElementById("error-summary-title");
   const errorSummaryMessage = document.getElementById("error-summary-message");
   const results = document.getElementById("results");
-  const verdict = document.getElementById("verdict");
-  const resultsTitle = document.getElementById("results-title");
-  const verdictSummary = document.getElementById("verdict-summary");
+  const resultTiming = document.getElementById("result-timing");
+  const summary = document.getElementById("summary");
   const resultList = document.getElementById("result-list");
-  const startOverButton = document.getElementById("start-over-button");
+  const returnButton = document.getElementById("return-button");
+  const newQueueButton = document.getElementById("new-queue-button");
+  const loadDemoButton = document.getElementById("load-demo-button");
+  const demoLoadStatus = document.getElementById("demo-load-status");
+  const demoConfirmDialog = document.getElementById("demo-confirm-dialog");
+  const demoConfirmAccept = document.getElementById("demo-confirm-accept");
+  const demoConfirmCancel = document.getElementById("demo-confirm-cancel");
 
+  /** @type {{ id: number, file: File, application: Record<string, string> }[]} */
+  let queue = [];
+  let nextQueueId = 1;
   let previewUrl = null;
+  let editingId = null;
+  /** @type {number | null} */
+  let editingIndex = null;
+  /** @type {{ id: number, file: File, application: Record<string, string> } | null} */
+  let editingSnapshot = null;
+  /** @type {File | null} */
+  let composeFile = null;
+  let demoLoading = false;
+  let checking = false;
 
   function hide(element) {
     element.hidden = true;
@@ -92,6 +119,35 @@
 
   function show(element) {
     element.hidden = false;
+  }
+
+  function formatDuration(ms) {
+    const seconds = Math.max(0, Number(ms) || 0) / 1000;
+    if (seconds < 10) {
+      return `${seconds.toFixed(1)} seconds`;
+    }
+    return `${Math.round(seconds)} seconds`;
+  }
+
+  function showTiming(element, ms, labelCount = 1) {
+    if (!element) {
+      return;
+    }
+    const count = Math.max(1, Number(labelCount) || 1);
+    element.textContent =
+      count === 1
+        ? `Checked in ${formatDuration(ms)}.`
+        : `Checked ${count} labels in ${formatDuration(ms)}.`;
+    show(element);
+  }
+
+  function makeTextElement(tagName, className, text) {
+    const element = document.createElement(tagName);
+    if (className) {
+      element.className = className;
+    }
+    element.textContent = text;
+    return element;
   }
 
   function clearPreview() {
@@ -157,8 +213,13 @@
     let bitmap;
     try {
       const started = window.performance?.now?.() ?? 0;
-      bitmap = await window.createImageBitmap(file, { imageOrientation: "from-image" });
-      const scale = Math.min(1, CLIENT_MAX_LONG_SIDE / Math.max(bitmap.width, bitmap.height));
+      bitmap = await window.createImageBitmap(file, {
+        imageOrientation: "from-image",
+      });
+      const scale = Math.min(
+        1,
+        CLIENT_MAX_LONG_SIDE / Math.max(bitmap.width, bitmap.height),
+      );
       if (scale === 1 && file.size <= CLIENT_TARGET_BYTES) {
         return file;
       }
@@ -198,56 +259,309 @@
     }
   }
 
-  function validateForm() {
-    clearErrors();
-    const issues = [];
-    const file = imageInput.files[0];
-    const imageMessage = fileValidationMessage(file);
-
-    if (imageMessage) {
-      showFieldError("image", imageMessage);
-      issues.push({ input: imageInput, message: imageMessage });
-    }
-
-    for (const field of FIELDS) {
-      const input = document.getElementById(field.key);
-      if (!input.value.trim()) {
-        showFieldError(field.key, field.emptyMessage);
-        issues.push({ input, message: field.emptyMessage });
-      }
-    }
-
-    if (issues.length > 0) {
-      const itemWord = issues.length === 1 ? "item" : "items";
-      showErrorSummary(
-        "Check the information below",
-        `Please fix ${issues.length} ${itemWord}, then check the label again.`,
-      );
-      issues[0].input.focus();
-      return false;
-    }
-
-    return true;
-  }
-
   function applicationPayload() {
     return Object.fromEntries(
       FIELDS.map((field) => [field.key, document.getElementById(field.key).value]),
     );
   }
 
-  function setLoading(isLoading) {
-    form.setAttribute("aria-busy", String(isLoading));
-    submitButton.disabled = isLoading;
-    submitButton.classList.toggle("is-loading", isLoading);
-    submitButtonText.textContent = isLoading ? "Checking Label…" : "Check Label";
-    loadingStatus.hidden = !isLoading;
-    singleModeButton.disabled = isLoading;
-    batchModeButton.disabled = isLoading;
+  function setFileInput(file) {
+    if (!file || typeof DataTransfer === "undefined") {
+      return false;
+    }
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    imageInput.files = transfer.files;
+    return imageInput.files.length === 1;
+  }
 
-    imageInput.disabled = isLoading;
+  function currentComposeFile() {
+    return imageInput.files[0] || composeFile;
+  }
+
+  function composeIsDirty() {
+    if (editingId !== null) {
+      return true;
+    }
+    if (currentComposeFile()) {
+      return true;
+    }
+    return FIELDS.some((field) =>
+      document.getElementById(field.key).value.trim(),
+    );
+  }
+
+  function clearFileSelection() {
+    composeFile = null;
+    if (typeof DataTransfer !== "undefined") {
+      try {
+        imageInput.files = new DataTransfer().files;
+        return;
+      } catch (_error) {
+        // Some test doubles replace `files` with a plain value.
+      }
+    }
+    try {
+      Object.defineProperty(imageInput, "files", {
+        configurable: true,
+        value: [],
+      });
+    } catch (_error) {
+      // Browser reset already ran; leave best-effort cleanup.
+    }
+  }
+
+  function clearCompose() {
+    clearErrors();
+    form.reset();
+    clearFileSelection();
+    clearPreview();
+    imageHelp.textContent = "No photo chosen";
+    editingId = null;
+    editingIndex = null;
+    editingSnapshot = null;
+    composeFile = null;
+    composeHeading.textContent = "Add a label";
+    addToQueueButton.textContent = "Add to Queue";
+    updateCancelButton();
+  }
+
+  function fillCompose(item) {
+    clearErrors();
     for (const field of FIELDS) {
-      document.getElementById(field.key).disabled = isLoading;
+      document.getElementById(field.key).value = item.application[field.key] || "";
+    }
+    clearPreview();
+    composeFile = item.file || null;
+    if (setFileInput(item.file)) {
+      imageHelp.textContent = item.file.name;
+      previewUrl = URL.createObjectURL(item.file);
+      previewImage.src = previewUrl;
+      show(photoPreview);
+    } else if (item.file) {
+      imageHelp.textContent = item.file.name;
+      previewUrl = URL.createObjectURL(item.file);
+      previewImage.src = previewUrl;
+      show(photoPreview);
+    } else {
+      imageHelp.textContent = "No photo chosen";
+    }
+    editingId = item.id;
+    editingSnapshot = item;
+    composeHeading.textContent = "Edit label";
+    addToQueueButton.textContent = "Update Queue";
+    updateCancelButton();
+  }
+
+  function updateCancelButton() {
+    const showCancel = composeIsDirty();
+    cancelComposeButton.hidden = !showCancel;
+    cancelComposeButton.disabled = checking || demoLoading;
+  }
+
+  function cancelCompose() {
+    if (checking || demoLoading) {
+      return;
+    }
+    if (editingSnapshot !== null) {
+      const index = Math.max(
+        0,
+        Math.min(editingIndex ?? queue.length, queue.length),
+      );
+      queue.splice(index, 0, editingSnapshot);
+    }
+    clearCompose();
+    hide(errorSummary);
+    renderQueue();
+    if (!composeCard.hidden) {
+      imageInput.focus();
+    }
+  }
+
+  function validateCompose() {
+    clearErrors();
+    const issues = [];
+    const imageMessage = fileValidationMessage(currentComposeFile());
+    if (imageMessage) {
+      showFieldError("image", imageMessage);
+      issues.push(imageInput);
+    }
+    for (const field of FIELDS) {
+      const input = document.getElementById(field.key);
+      if (!input.value.trim()) {
+        showFieldError(field.key, field.emptyMessage);
+        issues.push(input);
+      }
+    }
+    if (issues.length) {
+      showErrorSummary(
+        "Check the information below",
+        `Please fix ${issues.length} ${
+          issues.length === 1 ? "item" : "items"
+        }, then add the label to the queue.`,
+      );
+      issues[0].focus();
+      return false;
+    }
+    return true;
+  }
+
+  function updateComposeVisibility() {
+    const full = queue.length >= MAX_QUEUE && editingId === null;
+    composeCard.hidden = full;
+    queueLimitNote.hidden = !full;
+    composeStepNumber.textContent = String(queue.length + 1);
+    if (full) {
+      checkButton.focus();
+    }
+  }
+
+  function applyControlLock() {
+    const locked = checking || demoLoading;
+    form.setAttribute("aria-busy", String(checking));
+    checkButton.disabled = locked || queue.length < 1;
+    checkButton.classList.toggle("is-loading", checking);
+    addToQueueButton.disabled = locked;
+    updateCancelButton();
+    loadDemoButton.classList.toggle("is-disabled", locked);
+    loadDemoButton.setAttribute("aria-disabled", String(locked));
+    if (locked) {
+      loadDemoButton.setAttribute("tabindex", "-1");
+    } else {
+      loadDemoButton.removeAttribute("tabindex");
+    }
+    imageInput.disabled = locked;
+    for (const field of FIELDS) {
+      document.getElementById(field.key).disabled = locked;
+    }
+    for (const button of queueList.querySelectorAll("button")) {
+      button.disabled = locked;
+    }
+    if (!checking) {
+      const count = queue.length;
+      checkButtonText.textContent =
+        count === 1 ? "Check 1 Label" : `Check ${count} Labels`;
+    }
+  }
+
+  function updateCheckButton() {
+    applyControlLock();
+  }
+
+  function beginEdit(item, index) {
+    if (composeIsDirty()) {
+      showErrorSummary(
+        "Finish the form first",
+        "Add to Queue, Update Queue, or Cancel before editing another label.",
+      );
+      cancelComposeButton.focus();
+      return;
+    }
+    editingIndex = index;
+    queue = queue.filter((entry) => entry.id !== item.id);
+    fillCompose(item);
+    renderQueue();
+    show(composeCard);
+    hide(queueLimitNote);
+    hide(errorSummary);
+    imageInput.focus();
+    composeCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function renderQueue() {
+    queueList.replaceChildren();
+    if (!queue.length) {
+      hide(queuePanel);
+      updateComposeVisibility();
+      updateCheckButton();
+      return;
+    }
+    show(queuePanel);
+    for (const [index, item] of queue.entries()) {
+      const row = document.createElement("li");
+      row.className = "queue-item";
+      row.dataset.queueId = String(item.id);
+
+      const info = document.createElement("div");
+      info.className = "queue-item-info";
+      info.append(
+        makeTextElement("strong", "queue-item-title", `Label ${index + 1}`),
+      );
+      info.append(
+        makeTextElement("span", "queue-item-file", item.file.name || "Photo ready"),
+      );
+      info.append(makeTextElement("span", "queue-item-status", "Ready"));
+      row.append(info);
+
+      const actions = document.createElement("div");
+      actions.className = "queue-item-actions";
+      const edit = makeTextElement("button", "secondary-button queue-edit", "Edit");
+      edit.type = "button";
+      edit.setAttribute("aria-label", `Edit label ${index + 1}`);
+      edit.addEventListener("click", () => {
+        beginEdit(item, index);
+      });
+      const remove = makeTextElement(
+        "button",
+        "remove-label-button queue-remove",
+        "Remove",
+      );
+      remove.type = "button";
+      remove.setAttribute("aria-label", `Remove label ${index + 1}`);
+      remove.addEventListener("click", () => {
+        queue = queue.filter((entry) => entry.id !== item.id);
+        if (editingId === item.id) {
+          clearCompose();
+        }
+        renderQueue();
+        if (queue.length < MAX_QUEUE) {
+          show(composeCard);
+          hide(queueLimitNote);
+        }
+      });
+      actions.append(edit, remove);
+      row.append(actions);
+      queueList.append(row);
+    }
+    updateComposeVisibility();
+    updateCheckButton();
+  }
+
+  function addCurrentToQueue() {
+    if (demoLoading || checking) {
+      return;
+    }
+    if (queue.length >= MAX_QUEUE && editingId === null) {
+      showErrorSummary(
+        "Queue is full",
+        "You already have five labels queued. Check them, or remove one to add another.",
+      );
+      errorSummary.focus();
+      return;
+    }
+    if (!validateCompose()) {
+      return;
+    }
+    const file = currentComposeFile();
+    const entry = {
+      id: editingId ?? nextQueueId++,
+      file,
+      application: applicationPayload(),
+    };
+    if (editingId !== null) {
+      const index = Math.max(
+        0,
+        Math.min(editingIndex ?? queue.length, queue.length),
+      );
+      queue.splice(index, 0, entry);
+    } else {
+      queue.push(entry);
+    }
+    clearCompose();
+    renderQueue();
+    hide(errorSummary);
+    if (!composeCard.hidden) {
+      imageInput.focus();
     }
   }
 
@@ -282,7 +596,7 @@
         "Choose a photo and complete all seven items for every label.",
       EMPTY_APPLICATION: "Complete all seven items, then check the label again.",
       EMPTY_BATCH_APPLICATIONS:
-        "Complete all seven items for every label, then check the batch again.",
+        "Complete all seven items for every label, then check again.",
       INVALID_APPLICATION_JSON: "Check all seven items and try again.",
       INVALID_BATCH_JSON: "Check every label’s information and try again.",
       INVALID_APPLICATION: "Check all seven items and try again.",
@@ -290,10 +604,10 @@
         "Check every label’s information and try again.",
       APPLICATION_FIELD_TOO_LONG:
         "This entry is too long. Use 2,000 characters or fewer.",
-      EMPTY_BATCH: "Add at least one label before checking the batch.",
-      BATCH_SIZE_EXCEEDED: "Use no more than five labels in one batch.",
+      EMPTY_BATCH: "Add at least one label to the queue before checking.",
+      BATCH_SIZE_EXCEEDED: "Use no more than five labels in one check.",
       BATCH_PAIR_COUNT_MISMATCH:
-        "Choose exactly one photo for each label in the batch.",
+        "Choose exactly one photo for each label in the queue.",
       INVALID_MULTIPART: "We could not read this submission. Please try again.",
       REQUEST_TOO_LARGE:
         "This upload is too large. Choose a photo smaller than 20 MB.",
@@ -304,7 +618,7 @@
       INVALID_IMAGE: "We can’t open this photo. Try a different photo.",
       IMAGE_TYPE_MISMATCH: "We can’t open this photo. Try a different photo.",
       VERIFICATION_UNAVAILABLE:
-        "We couldn’t check this label. Your information is still here. Please try again.",
+        "We couldn’t check these labels. Your queue is still here. Please try again.",
     };
 
     if (
@@ -315,61 +629,10 @@
       return serverMessage;
     }
 
-    if (fieldName?.startsWith("application.")) {
-      const key = fieldName.slice("application.".length);
-      const field = fieldByKey.get(key);
-      if (field) {
-        return field.emptyMessage;
-      }
-    }
-
     return (
       messages[code] ||
-      "We couldn’t check this label. Your information is still here. Please try again."
+      "We couldn’t check these labels. Your queue is still here. Please try again."
     );
-  }
-
-  function apiFieldKey(fieldName) {
-    if (fieldName === "image") {
-      return "image";
-    }
-    if (fieldName?.startsWith("application.")) {
-      const key = fieldName.slice("application.".length);
-      return fieldByKey.has(key) ? key : null;
-    }
-    return null;
-  }
-
-  function showRequestError(error) {
-    let message;
-    let key = null;
-
-    if (error.name === "AbortError") {
-      message = "This is taking longer than expected. Please try again.";
-    } else if (error instanceof TypeError) {
-      message =
-        "We couldn’t connect. Check your internet connection and try again.";
-    } else if (error.apiError) {
-      message = friendlyApiError(
-        error.apiError.code,
-        error.apiError.field,
-        error.retryAfter,
-        error.apiError.message,
-      );
-      key = apiFieldKey(error.apiError.field);
-    } else {
-      message =
-        "We couldn’t check this label. Your information is still here. Please try again.";
-    }
-
-    clearErrors();
-    showErrorSummary("We couldn’t check this label", message);
-    if (key) {
-      showFieldError(key, message);
-      document.getElementById(key).focus();
-    } else {
-      errorSummary.focus();
-    }
   }
 
   function isValidResult(payload) {
@@ -428,530 +691,28 @@
     return payload.verdict === (hasFailure ? "NEEDS_REVIEW" : "PASS");
   }
 
-  function makeTextElement(tagName, className, text) {
-    const element = document.createElement(tagName);
-    if (className) {
-      element.className = className;
-    }
-    element.textContent = text;
-    return element;
-  }
-
-  function resultItem(field, result) {
-    const item = document.createElement("li");
-    const failed = result.status === "FAIL";
-    item.className = `result-item ${failed ? "fail" : "pass"}`;
-
-    const header = document.createElement("div");
-    header.className = "result-header";
-    header.append(makeTextElement("h3", "", field.label));
-    header.append(
-      makeTextElement(
-        "span",
-        `status ${failed ? "fail" : "pass"}`,
-        failed ? "✕ FAIL — Does not match" : "✓ PASS — Matches",
-      ),
-    );
-    item.append(header);
-
-    if (!failed) {
-      return item;
-    }
-
-    const actualMissing = result.actual === null || result.actual === "";
-    item.append(
-      makeTextElement(
-        "p",
-        "failure-reason",
-        actualMissing ? field.missingReason : field.mismatchReason,
-      ),
-    );
-
-    const comparison = document.createElement("dl");
-    comparison.className = "comparison";
-    comparison.append(makeTextElement("dt", "", "Should say"));
-    comparison.append(
-      makeTextElement(
-        "dd",
-        "comparison-value",
-        result.expected || "Not provided",
-      ),
-    );
-    comparison.append(makeTextElement("dt", "", "Label says"));
-    comparison.append(
-      makeTextElement(
-        "dd",
-        "comparison-value",
-        actualMissing ? "Not found on the photo" : result.actual,
-      ),
-    );
-    item.append(comparison);
-    return item;
-  }
-
-  function renderResults(payload) {
-    const ordered = FIELDS.map((field) => ({
-      field,
-      result: payload.fields.find((result) => result.field === field.key),
-    }));
-    const failed = ordered.filter(({ result }) => result.status === "FAIL");
-    const passed = ordered.filter(({ result }) => result.status === "PASS");
-    const isApproved = payload.verdict === "PASS";
-
-    verdict.className = `verdict ${isApproved ? "approved" : "needs-review"}`;
-    resultsTitle.textContent = isApproved ? "✓ APPROVED" : "! NEEDS REVIEW";
-
-    if (isApproved) {
-      verdictSummary.textContent = "All 7 items match.";
-    } else {
-      const labels = failed.map(({ field }) => field.label).join(", ");
-      const itemWord = failed.length === 1 ? "item does" : "items do";
-      verdictSummary.textContent = `${failed.length} ${itemWord} not match: ${labels}.`;
-    }
-
-    resultList.replaceChildren(
-      ...[...failed, ...passed].map(({ field, result }) =>
-        resultItem(field, result),
-      ),
-    );
-    hide(form);
-    show(results);
-    results.focus();
-    results.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function hideStaleResults() {
-    if (!results.hidden) {
-      hide(results);
-      resultList.replaceChildren();
-    }
-  }
-
-  imageInput.addEventListener("change", () => {
-    clearFieldError("image");
-    hide(errorSummary);
-    hideStaleResults();
-    clearPreview();
-
-    const file = imageInput.files[0];
-    imageHelp.textContent = file ? file.name : "No photo chosen";
-    if (file && SUPPORTED_IMAGE_TYPES.has(file.type) && file.size > 0) {
-      previewUrl = URL.createObjectURL(file);
-      previewImage.src = previewUrl;
-      show(photoPreview);
-    }
-  });
-
-  for (const field of FIELDS) {
-    const input = document.getElementById(field.key);
-    input.addEventListener("input", () => {
-      if (input.value.trim()) {
-        clearFieldError(field.key);
-      }
-      hide(errorSummary);
-      hideStaleResults();
-    });
-  }
-
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const submittedAt = window.performance?.now?.() ?? Date.now();
-    hideStaleResults();
-
-    if (!validateForm()) {
-      return;
-    }
-
-    const controller = new AbortController();
-    const timeout = window.setTimeout(
-      () => controller.abort(),
-      REQUEST_TIMEOUT_MS,
-    );
-    let payload = null;
-    let requestError = null;
-    setLoading(true);
-
-    try {
-      const formData = new FormData();
-      formData.append("image", await optimizedUpload(imageInput.files[0]));
-      formData.append("application", JSON.stringify(applicationPayload()));
-      const response = await fetch("/verify", {
-        method: "POST",
-        body: formData,
-        signal: controller.signal,
-      });
-      let body = null;
-      try {
-        body = await response.json();
-      } catch (_error) {
-        // A malformed response is handled as a readable generic error below.
-      }
-
-      if (!response.ok) {
-        const error = new Error("Verification request failed");
-        error.apiError = body?.error || {};
-        error.retryAfter = response.headers.get("Retry-After");
-        throw error;
-      }
-      if (!isValidResult(body)) {
-        throw new Error("Invalid verification response");
-      }
-      payload = body;
-    } catch (error) {
-      requestError = error;
-    } finally {
-      window.clearTimeout(timeout);
-      setLoading(false);
-    }
-
-    if (requestError) {
-      showRequestError(requestError);
-      return;
-    }
-
-    clearErrors();
-    renderResults(payload);
-    const renderedAt = window.performance?.now?.() ?? Date.now();
-    results.dataset.clickToResultMs = String(
-      Math.max(0, Math.round(renderedAt - submittedAt)),
-    );
-    try {
-      window.performance?.measure?.("single-label-click-to-result", {
-        start: submittedAt,
-        end: renderedAt,
-      });
-    } catch (_unsupportedPerformanceApi) {
-      // The result is already rendered; browser telemetry is optional.
-    }
-  });
-
-  startOverButton.addEventListener("click", () => {
-    form.reset();
-    clearPreview();
-    clearErrors();
-    hide(results);
-    show(form);
-    resultList.replaceChildren();
-    imageHelp.textContent = "No photo chosen";
-    imageInput.focus();
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  });
-
-  const singleModeButton = document.getElementById("single-mode-button");
-  const batchModeButton = document.getElementById("batch-mode-button");
-  const batchForm = document.getElementById("batch-form");
-  const batchCards = document.getElementById("batch-cards");
-  const addLabelButton = document.getElementById("add-label-button");
-  const batchSubmitButton = document.getElementById("batch-submit-button");
-  const batchSubmitText = document.getElementById("batch-submit-text");
-  const batchProgress = document.getElementById("batch-progress");
-  const batchProgressText = document.getElementById("batch-progress-text");
-  const batchErrorSummary = document.getElementById("batch-error-summary");
-  const batchErrorTitle = document.getElementById("batch-error-title");
-  const batchErrorMessage = document.getElementById("batch-error-message");
-  const batchResults = document.getElementById("batch-results");
-  const batchSummary = document.getElementById("batch-summary");
-  const batchResultList = document.getElementById("batch-result-list");
-  const editBatchButton = document.getElementById("edit-batch-button");
-  const newBatchButton = document.getElementById("new-batch-button");
-
-  let nextBatchCardId = 1;
-  const batchPreviewUrls = new Map();
-
-  function batchInputId(cardId, key) {
-    return `batch-${cardId}-${key}`;
-  }
-
-  function batchField(cardId, field) {
-    const wrapper = document.createElement("div");
-    wrapper.className = "field";
-    const id = batchInputId(cardId, field.key);
-    const label = makeTextElement("label", "", field.label);
-    label.htmlFor = id;
-    wrapper.append(label);
-
-    if (field.key === "government_warning") {
-      const help = makeTextElement(
-          "p",
-          "field-help important-help",
-          "Copy this exactly, including capital letters, spaces, and punctuation.",
-      );
-      help.id = `${id}-help`;
-      wrapper.append(help);
-    }
-
-    const input = document.createElement(
-      field.key === "government_warning" ? "textarea" : "input",
-    );
-    input.id = id;
-    input.name = field.key;
-    input.required = true;
-    input.maxLength = 2000;
-    if (input.tagName === "INPUT") {
-      input.type = "text";
-    } else {
-      input.rows = 5;
-    }
-    input.setAttribute(
-      "aria-describedby",
-      field.key === "government_warning" ? `${id}-help ${id}-error` : `${id}-error`,
-    );
-    input.addEventListener("input", () => {
-      if (input.value.trim()) {
-        input.removeAttribute("aria-invalid");
-        hide(document.getElementById(`${id}-error`));
-      }
-      hide(batchErrorSummary);
-    });
-    wrapper.append(input);
-    const error = makeTextElement("p", "field-error", "");
-    error.id = `${id}-error`;
-    error.hidden = true;
-    wrapper.append(error);
-    return wrapper;
-  }
-
-  function updateBatchCards() {
-    const cards = [...batchCards.querySelectorAll(".batch-card")];
-    cards.forEach((card, index) => {
-      card.querySelector(".batch-card-number").textContent = String(index + 1);
-      card.querySelector(".batch-card-title").textContent = `Label ${index + 1}`;
-      const remove = card.querySelector(".remove-label-button");
-      remove.hidden = cards.length <= 2;
-      remove.setAttribute("aria-label", `Remove label ${index + 1}`);
-    });
-    addLabelButton.hidden = cards.length >= 5;
-  }
-
-  function addBatchCard() {
-    if (batchCards.children.length >= 5) {
-      return;
-    }
-    const cardId = nextBatchCardId;
-    nextBatchCardId += 1;
-    const card = document.createElement("section");
-    card.className = "card batch-card";
-    card.dataset.cardId = String(cardId);
-
-    const heading = document.createElement("div");
-    heading.className = "batch-card-heading";
-    const titleGroup = document.createElement("div");
-    titleGroup.className = "section-heading";
-    const number = makeTextElement("span", "step-number batch-card-number", "");
-    number.setAttribute("aria-hidden", "true");
-    titleGroup.append(number);
-    const title = makeTextElement("h2", "batch-card-title", "");
-    title.id = `batch-${cardId}-heading`;
-    card.setAttribute("aria-labelledby", title.id);
-    titleGroup.append(title);
-    heading.append(titleGroup);
-    const remove = makeTextElement("button", "remove-label-button", "Remove");
-    remove.type = "button";
-    remove.addEventListener("click", () => {
-      const url = batchPreviewUrls.get(cardId);
-      if (url) {
-        URL.revokeObjectURL(url);
-        batchPreviewUrls.delete(cardId);
-      }
-      card.remove();
-      updateBatchCards();
-    });
-    heading.append(remove);
-    card.append(heading);
-
-    const imageId = batchInputId(cardId, "image");
-    const picker = document.createElement("div");
-    picker.className = "file-picker";
-    const input = document.createElement("input");
-    input.className = "file-input";
-    input.id = imageId;
-    input.name = "image";
-    input.type = "file";
-    input.accept = "image/jpeg,image/png,image/webp";
-    input.required = true;
-    input.setAttribute("aria-describedby", `${imageId}-help ${imageId}-error`);
-    const label = makeTextElement("label", "file-button", "Choose Label Photo");
-    label.htmlFor = imageId;
-    const help = makeTextElement("p", "file-name", "No photo chosen");
-    help.id = `${imageId}-help`;
-    help.setAttribute("aria-live", "polite");
-    picker.append(input, label, help);
-    card.append(picker);
-    const imageError = makeTextElement("p", "field-error", "");
-    imageError.id = `${imageId}-error`;
-    imageError.hidden = true;
-    card.append(imageError);
-    const preview = document.createElement("img");
-    preview.className = "batch-photo-preview";
-    preview.alt = "Selected label photo";
-    preview.hidden = true;
-    card.append(preview);
-    input.addEventListener("change", () => {
-      const oldUrl = batchPreviewUrls.get(cardId);
-      if (oldUrl) {
-        URL.revokeObjectURL(oldUrl);
-        batchPreviewUrls.delete(cardId);
-      }
-      input.removeAttribute("aria-invalid");
-      hide(imageError);
-      const file = input.files[0];
-      help.textContent = file ? file.name : "No photo chosen";
-      preview.hidden = true;
-      preview.removeAttribute("src");
-      if (file && SUPPORTED_IMAGE_TYPES.has(file.type) && file.size > 0) {
-        const url = URL.createObjectURL(file);
-        batchPreviewUrls.set(cardId, url);
-        preview.src = url;
-        preview.hidden = false;
-      }
-      hide(batchErrorSummary);
-    });
-
-    for (const field of FIELDS) {
-      card.append(batchField(cardId, field));
-    }
-    batchCards.append(card);
-    updateBatchCards();
-  }
-
-  function clearBatchPreviews() {
-    for (const url of batchPreviewUrls.values()) {
-      URL.revokeObjectURL(url);
-    }
-    batchPreviewUrls.clear();
-  }
-
-  function resetBatch() {
-    clearBatchPreviews();
-    batchCards.replaceChildren();
-    batchSummary.replaceChildren();
-    batchResultList.replaceChildren();
-    hide(batchErrorSummary);
-    hide(batchResults);
-    nextBatchCardId = 1;
-    addBatchCard();
-    addBatchCard();
-  }
-
-  function setMode(mode) {
-    const isBatch = mode === "batch";
-    singleModeButton.classList.toggle("selected", !isBatch);
-    batchModeButton.classList.toggle("selected", isBatch);
-    singleModeButton.setAttribute("aria-pressed", String(!isBatch));
-    batchModeButton.setAttribute("aria-pressed", String(isBatch));
-    hide(results);
-    hide(batchResults);
-    form.hidden = isBatch;
-    batchForm.hidden = !isBatch;
-    if (isBatch && batchCards.children.length === 0) {
-      resetBatch();
-    }
-  }
-
-  function showBatchFieldError(input, error, message) {
-    input.setAttribute("aria-invalid", "true");
-    error.textContent = `Error: ${message}`;
-    show(error);
-  }
-
-  function validateBatch() {
-    hide(batchErrorSummary);
-    const issues = [];
-    for (const card of batchCards.querySelectorAll(".batch-card")) {
-      const cardId = card.dataset.cardId;
-      const image = document.getElementById(batchInputId(cardId, "image"));
-      const imageError = document.getElementById(`${image.id}-error`);
-      image.removeAttribute("aria-invalid");
-      hide(imageError);
-      const imageMessage = fileValidationMessage(image.files[0]);
-      if (imageMessage) {
-        showBatchFieldError(image, imageError, imageMessage);
-        issues.push(image);
-      }
-      for (const field of FIELDS) {
-        const input = document.getElementById(batchInputId(cardId, field.key));
-        const error = document.getElementById(`${input.id}-error`);
-        input.removeAttribute("aria-invalid");
-        hide(error);
-        if (!input.value.trim()) {
-          showBatchFieldError(input, error, field.emptyMessage);
-          issues.push(input);
-        }
-      }
-    }
-    if (issues.length) {
-      batchErrorTitle.textContent = "Check the labels below";
-      batchErrorMessage.textContent = `Please fix ${issues.length} ${issues.length === 1 ? "item" : "items"}, then check the batch again.`;
-      show(batchErrorSummary);
-      issues[0].focus();
-      return false;
-    }
-    return true;
-  }
-
-  async function batchSubmission() {
-    const formData = new FormData();
-    const applications = [];
-    const cards = [...batchCards.querySelectorAll(".batch-card")];
-    const optimized = await Promise.all(
-      cards.map((card) => {
-        const cardId = card.dataset.cardId;
-        const image = document.getElementById(batchInputId(cardId, "image"));
-        return optimizedUpload(image.files[0]);
-      }),
-    );
-    for (const [index, card] of cards.entries()) {
-      const cardId = card.dataset.cardId;
-      formData.append("images", optimized[index]);
-      applications.push(
-        Object.fromEntries(
-          FIELDS.map((field) => [
-            field.key,
-            document.getElementById(batchInputId(cardId, field.key)).value,
-          ]),
-        ),
-      );
-    }
-    formData.append("applications", JSON.stringify(applications));
-    return formData;
-  }
-
-  function setBatchLoading(isLoading) {
-    batchForm.setAttribute("aria-busy", String(isLoading));
-    batchSubmitButton.disabled = isLoading;
-    batchSubmitButton.classList.toggle("is-loading", isLoading);
-    batchSubmitText.textContent = isLoading ? "Checking Batch…" : "Check Batch";
-    addLabelButton.disabled = isLoading;
-    singleModeButton.disabled = isLoading;
-    batchModeButton.disabled = isLoading;
-    for (const control of batchCards.querySelectorAll("input, textarea, button")) {
-      control.disabled = isLoading;
-    }
-    if (!isLoading) {
-      hide(batchProgress);
-    }
-  }
-
   function isValidBatchResult(payload) {
     if (!payload || !payload.summary || !Array.isArray(payload.items)) {
       return false;
     }
-    const summary = payload.summary;
+    const batchSummary = payload.summary;
     const counts = [
-      summary.passed,
-      summary.needs_review,
-      summary.unable_to_verify,
-      summary.total,
+      batchSummary.passed,
+      batchSummary.needs_review,
+      batchSummary.unable_to_verify,
+      batchSummary.total,
     ];
     if (!counts.every((count) => Number.isInteger(count) && count >= 0)) {
       return false;
     }
     if (
-      summary.total < 1 ||
-      summary.total > 5 ||
-      summary.passed + summary.needs_review + summary.unable_to_verify !==
-        summary.total ||
-      payload.items.length !== summary.total ||
+      batchSummary.total < 1 ||
+      batchSummary.total > 5 ||
+      batchSummary.passed +
+        batchSummary.needs_review +
+        batchSummary.unable_to_verify !==
+        batchSummary.total ||
+      payload.items.length !== batchSummary.total ||
       typeof payload.latency_ms !== "number" ||
       !Number.isFinite(payload.latency_ms) ||
       payload.latency_ms < 0
@@ -990,10 +751,64 @@
       }
     }
     return (
-      derived.PASS === summary.passed &&
-      derived.NEEDS_REVIEW === summary.needs_review &&
-      derived.UNABLE_TO_VERIFY === summary.unable_to_verify
+      derived.PASS === batchSummary.passed &&
+      derived.NEEDS_REVIEW === batchSummary.needs_review &&
+      derived.UNABLE_TO_VERIFY === batchSummary.unable_to_verify
     );
+  }
+
+  function resultItem(field, result) {
+    const item = document.createElement("li");
+    const failed = result.status === "FAIL";
+    item.className = `result-item ${failed ? "fail" : "pass"}`;
+
+    const header = document.createElement("div");
+    header.className = "result-header";
+    header.append(makeTextElement("h3", "", field.label));
+    header.append(
+      makeTextElement(
+        "span",
+        `status ${failed ? "fail" : "pass"}`,
+        failed ? "✕ FAIL — Does not match" : "✓ PASS — Matches",
+      ),
+    );
+    item.append(header);
+
+    if (!failed) {
+      return item;
+    }
+
+    const expectedMissing =
+      result.expected === null || String(result.expected).trim() === "";
+    const actualMissing =
+      result.actual === null || String(result.actual).trim() === "";
+    item.append(
+      makeTextElement(
+        "p",
+        "failure-reason",
+        actualMissing ? field.missingReason : field.mismatchReason,
+      ),
+    );
+    const comparison = document.createElement("dl");
+    comparison.className = "comparison";
+    comparison.append(makeTextElement("dt", "", "Should say"));
+    comparison.append(
+      makeTextElement(
+        "dd",
+        "comparison-value",
+        expectedMissing ? "Nothing entered" : result.expected,
+      ),
+    );
+    comparison.append(makeTextElement("dt", "", "Label says"));
+    comparison.append(
+      makeTextElement(
+        "dd",
+        "comparison-value",
+        actualMissing ? "Not found on the photo" : result.actual,
+      ),
+    );
+    item.append(comparison);
+    return item;
   }
 
   function summaryItem(label, value, className) {
@@ -1006,13 +821,15 @@
 
   function batchResultItem(item) {
     const details = document.createElement("details");
-    details.className = `batch-result-item ${item.status.toLowerCase().replaceAll("_", "-")}`;
+    details.className = `batch-result-item ${item.status
+      .toLowerCase()
+      .replaceAll("_", "-")}`;
     const toggle = document.createElement("summary");
     const title = document.createElement("span");
     title.append(makeTextElement("strong", "", `Label ${item.index + 1}`));
     title.append(makeTextElement("span", "batch-filename", item.filename));
     const labels = {
-      PASS: "✓ Passed",
+      PASS: "✓ APPROVED",
       NEEDS_REVIEW: "! Needs review",
       UNABLE_TO_VERIFY: "✕ Unable to verify",
     };
@@ -1025,7 +842,12 @@
         makeTextElement(
           "p",
           "failure-reason",
-          friendlyApiError(item.error.code, item.error.field, null, item.error.message),
+          friendlyApiError(
+            item.error.code,
+            item.error.field,
+            null,
+            item.error.message,
+          ),
         ),
       );
     } else {
@@ -1048,9 +870,9 @@
     return details;
   }
 
-  function renderBatchResults(payload) {
-    batchSummary.replaceChildren(
-      summaryItem("Passed", payload.summary.passed, "passed"),
+  function renderResults(payload) {
+    summary.replaceChildren(
+      summaryItem("APPROVED", payload.summary.passed, "passed"),
       summaryItem("Needs review", payload.summary.needs_review, "review"),
       ...(payload.summary.unable_to_verify
         ? [
@@ -1074,19 +896,46 @@
     if (firstActionable) {
       firstActionable.open = true;
     }
-    batchResultList.replaceChildren(...rendered);
-    hide(batchForm);
-    show(batchResults);
-    batchResults.focus();
-    batchResults.scrollIntoView({ behavior: "smooth", block: "start" });
+    resultList.replaceChildren(...rendered);
+    hide(form);
+    show(results);
+    results.focus();
+    results.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function showBatchRequestError(error) {
-    let message = "We couldn’t check this batch. Your information is still here. Please try again.";
+  function setLoading(isLoading) {
+    checking = isLoading;
+    if (isLoading) {
+      checkButtonText.textContent =
+        queue.length === 1 ? "Checking 1 Label…" : `Checking ${queue.length} Labels…`;
+    } else {
+      hide(checkProgress);
+    }
+    applyControlLock();
+  }
+
+  async function buildSubmission() {
+    const formData = new FormData();
+    const applications = [];
+    const optimized = await Promise.all(
+      queue.map((item) => optimizedUpload(item.file)),
+    );
+    for (const [index, item] of queue.entries()) {
+      formData.append("images", optimized[index]);
+      applications.push(item.application);
+    }
+    formData.append("applications", JSON.stringify(applications));
+    return formData;
+  }
+
+  function showRequestError(error) {
+    let message =
+      "We couldn’t check these labels. Your queue is still here. Please try again.";
     if (error.name === "AbortError") {
-      message = "This batch is taking longer than expected. Please try again.";
+      message = "This is taking longer than expected. Please try again.";
     } else if (error instanceof TypeError) {
-      message = "We couldn’t connect. Check your internet connection and try again.";
+      message =
+        "We couldn’t connect. Check your internet connection and try again.";
     } else if (error.apiError) {
       message = friendlyApiError(
         error.apiError.code,
@@ -1095,102 +944,306 @@
         error.apiError.message,
       );
     }
-    batchErrorTitle.textContent = "We couldn’t check this batch";
-    batchErrorMessage.textContent = message;
-    show(batchErrorSummary);
-    const input = error.apiError ? batchApiInput(error.apiError.field) : null;
-    if (input) {
-      const fieldError = document.getElementById(`${input.id}-error`);
-      showBatchFieldError(input, fieldError, message);
-      input.focus();
-    } else {
-      batchErrorSummary.focus();
-    }
+    showErrorSummary("We couldn’t check these labels", message);
+    errorSummary.focus();
   }
 
-  function batchApiInput(fieldName) {
-    const match = /^(applications|images)\[(\d+)](?:\.([a-z_]+))?$/.exec(fieldName || "");
-    if (!match) {
-      return null;
+  function resetQueue() {
+    queue = [];
+    nextQueueId = 1;
+    editingId = null;
+    editingIndex = null;
+    composeFile = null;
+    clearCompose();
+    if (resultTiming) {
+      resultTiming.textContent = "";
+      hide(resultTiming);
     }
-    const card = batchCards.querySelectorAll(".batch-card")[Number(match[2])];
-    if (!card) {
-      return null;
+    if (demoLoadStatus) {
+      demoLoadStatus.textContent = "";
+      hide(demoLoadStatus);
     }
-    const key = match[1] === "images" ? "image" : match[3];
-    return key ? document.getElementById(batchInputId(card.dataset.cardId, key)) : null;
+    summary.replaceChildren();
+    resultList.replaceChildren();
+    hide(results);
+    hide(errorSummary);
+    show(form);
+    renderQueue();
   }
 
-  addLabelButton.addEventListener("click", addBatchCard);
-  singleModeButton.addEventListener("click", () => setMode("single"));
-  batchModeButton.addEventListener("click", () => setMode("batch"));
+  function isDemoScenario(item) {
+    return (
+      item &&
+      typeof item.image === "string" &&
+      item.image.length > 0 &&
+      item.application &&
+      typeof item.application === "object" &&
+      FIELDS.every(
+        (field) =>
+          typeof item.application[field.key] === "string" &&
+          item.application[field.key].trim().length > 0,
+      )
+    );
+  }
 
-  batchForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!validateBatch()) {
+  function openDemoConfirmDialog() {
+    if (demoLoading || checking) {
       return;
     }
-    const count = batchCards.children.length;
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    const progressDelay = window.setTimeout(() => {
-      batchProgressText.textContent = `Checking ${count} labels…`;
-      show(batchProgress);
-    }, 400);
+    if (typeof demoConfirmDialog.showModal === "function") {
+      if (!demoConfirmDialog.open) {
+        demoConfirmDialog.showModal();
+      }
+    } else {
+      demoConfirmDialog.setAttribute("open", "");
+    }
+    demoConfirmAccept.focus();
+  }
+
+  function closeDemoConfirmDialog() {
+    if (typeof demoConfirmDialog.close === "function" && demoConfirmDialog.open) {
+      demoConfirmDialog.close();
+    } else {
+      demoConfirmDialog.removeAttribute("open");
+    }
+  }
+
+  async function loadDemoLabels() {
+    if (demoLoading || checking) {
+      return;
+    }
+    closeDemoConfirmDialog();
+    const hadQueueItems = queue.length > 0;
+    demoLoading = true;
+    applyControlLock();
+    hide(errorSummary);
+    if (demoLoadStatus) {
+      demoLoadStatus.textContent = "Loading sample labels…";
+      show(demoLoadStatus);
+    }
+    try {
+      const manifestResponse = await fetch("/static/demo/scenarios.json");
+      if (!manifestResponse.ok) {
+        throw new Error("demo manifest unavailable");
+      }
+      const scenarios = await manifestResponse.json();
+      if (!Array.isArray(scenarios) || scenarios.length < 1) {
+        throw new Error("demo manifest empty");
+      }
+      const selected = scenarios.slice(0, MAX_QUEUE).filter(isDemoScenario);
+      if (selected.length < 1) {
+        throw new Error("demo scenarios invalid");
+      }
+      const entries = [];
+      for (const scenario of selected) {
+        const imageResponse = await fetch(`/static/demo/${scenario.image}`);
+        if (!imageResponse.ok) {
+          throw new Error(`demo image missing: ${scenario.image}`);
+        }
+        const blob = await imageResponse.blob();
+        const type = blob.type || "image/jpeg";
+        if (!SUPPORTED_IMAGE_TYPES.has(type) && type !== "application/octet-stream") {
+          throw new Error(`demo image type unsupported: ${scenario.image}`);
+        }
+        const file = new File([blob], scenario.image, {
+          type: type === "application/octet-stream" ? "image/jpeg" : type,
+        });
+        entries.push({
+          id: nextQueueId++,
+          file,
+          application: Object.fromEntries(
+            FIELDS.map((field) => [field.key, scenario.application[field.key]]),
+          ),
+        });
+      }
+      queue = entries;
+      editingId = null;
+      editingIndex = null;
+      composeFile = null;
+      clearCompose();
+      hide(results);
+      demoLoading = false;
+      renderQueue();
+      if (demoLoadStatus) {
+        demoLoadStatus.textContent = hadQueueItems
+          ? `Replaced your queue with ${entries.length} demo labels.`
+          : `Loaded ${entries.length} demo labels.`;
+        show(demoLoadStatus);
+      }
+      checkButton.focus();
+    } catch (_error) {
+      if (demoLoadStatus) {
+        demoLoadStatus.textContent = "";
+        hide(demoLoadStatus);
+      }
+      showErrorSummary(
+        "Could not load demo labels",
+        "We couldn’t load the sample labels. Please try again, or add a label by hand.",
+      );
+      errorSummary.focus();
+    } finally {
+      demoLoading = false;
+      applyControlLock();
+    }
+  }
+
+  imageInput.addEventListener("change", () => {
+    clearFieldError("image");
+    hide(errorSummary);
+    clearPreview();
+    const file = imageInput.files[0] || null;
+    composeFile = file;
+    imageHelp.textContent = file ? file.name : "No photo chosen";
+    if (file && SUPPORTED_IMAGE_TYPES.has(file.type) && file.size > 0) {
+      previewUrl = URL.createObjectURL(file);
+      previewImage.src = previewUrl;
+      show(photoPreview);
+    }
+    updateCancelButton();
+  });
+
+  for (const field of FIELDS) {
+    const input = document.getElementById(field.key);
+    input.addEventListener("input", () => {
+      if (input.value.trim()) {
+        clearFieldError(field.key);
+      }
+      hide(errorSummary);
+      updateCancelButton();
+    });
+  }
+
+  addToQueueButton.addEventListener("click", addCurrentToQueue);
+  cancelComposeButton.addEventListener("click", cancelCompose);
+  loadDemoButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (loadDemoButton.getAttribute("aria-disabled") === "true") {
+      return;
+    }
+    openDemoConfirmDialog();
+  });
+  demoConfirmAccept.addEventListener("click", () => {
+    void loadDemoLabels();
+  });
+  demoConfirmCancel.addEventListener("click", () => {
+    closeDemoConfirmDialog();
+    loadDemoButton.focus();
+  });
+  demoConfirmDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeDemoConfirmDialog();
+    loadDemoButton.focus();
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submittedAt = window.performance?.now?.() ?? Date.now();
+    hide(errorSummary);
+    if (demoLoading) {
+      return;
+    }
+    if (composeIsDirty()) {
+      showErrorSummary(
+        editingId !== null ? "Finish editing first" : "Finish the form first",
+        editingId !== null
+          ? "Update Queue or Cancel before checking."
+          : "Add to Queue or Cancel before checking.",
+      );
+      cancelComposeButton.focus();
+      return;
+    }
+    if (queue.length < 1) {
+      showErrorSummary(
+        "Nothing to check yet",
+        "Add at least one label to the queue, then check.",
+      );
+      errorSummary.focus();
+      return;
+    }
+
+    const count = queue.length;
     let payload = null;
     let requestError = null;
-    setBatchLoading(true);
+    let timeout = 0;
+    let progressDelay = 0;
+    setLoading(true);
     try {
+      const formData = await buildSubmission();
+      const controller = new AbortController();
+      timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      progressDelay = window.setTimeout(() => {
+        checkProgressText.textContent =
+          count === 1 ? "Checking 1 label…" : `Checking ${count} labels…`;
+        show(checkProgress);
+      }, 400);
       const response = await fetch("/verify/batch", {
         method: "POST",
-        body: await batchSubmission(),
+        body: formData,
         signal: controller.signal,
       });
-      let body = null;
+      let responseBody = null;
       try {
-        body = await response.json();
+        responseBody = await response.json();
       } catch (_error) {
         // Invalid response bodies are handled as a generic readable error.
       }
-      if (isValidBatchResult(body)) {
-        payload = body;
+      if (isValidBatchResult(responseBody)) {
+        payload = responseBody;
       } else if (!response.ok) {
-        const error = new Error("Batch verification request failed");
-        error.apiError = body?.error || {};
+        const error = new Error("Verification request failed");
+        error.apiError = responseBody?.error || {};
         error.retryAfter = response.headers.get("Retry-After");
         throw error;
       } else {
-        throw new Error("Invalid batch verification response");
+        throw new Error("Invalid verification response");
       }
     } catch (error) {
       requestError = error;
     } finally {
       window.clearTimeout(timeout);
       window.clearTimeout(progressDelay);
-      setBatchLoading(false);
+      setLoading(false);
     }
+
     if (requestError) {
-      showBatchRequestError(requestError);
+      showRequestError(requestError);
       return;
     }
-    hide(batchErrorSummary);
-    renderBatchResults(payload);
+
+    renderResults(payload);
+    const renderedAt = window.performance?.now?.() ?? Date.now();
+    const clickToResultMs = Math.max(0, Math.round(renderedAt - submittedAt));
+    results.dataset.clickToResultMs = String(clickToResultMs);
+    showTiming(resultTiming, clickToResultMs, payload.summary.total);
+    try {
+      window.performance?.measure?.("queue-click-to-result", {
+        start: submittedAt,
+        end: renderedAt,
+      });
+    } catch (_unsupportedPerformanceApi) {
+      // Result already rendered; browser telemetry is optional.
+    }
   });
 
-  editBatchButton.addEventListener("click", () => {
-    hide(batchResults);
-    show(batchForm);
-    batchForm.querySelector("input").focus();
+  returnButton.addEventListener("click", () => {
+    hide(results);
+    show(form);
+    if (queue.length) {
+      queueList.querySelector("button")?.focus();
+    } else {
+      imageInput.focus();
+    }
   });
-  newBatchButton.addEventListener("click", () => {
-    resetBatch();
-    show(batchForm);
-    batchForm.querySelector("input").focus();
+
+  newQueueButton.addEventListener("click", () => {
+    resetQueue();
+    imageInput.focus();
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
 
   window.addEventListener("beforeunload", () => {
     clearPreview();
-    clearBatchPreviews();
   });
+
+  renderQueue();
 })();
