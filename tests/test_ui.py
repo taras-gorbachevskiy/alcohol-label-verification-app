@@ -28,6 +28,9 @@ def test_queue_page_has_required_controls() -> None:
     assert "Add to Queue" in page
     assert 'id="load-demo-button"' in page
     assert "Load 3 demo labels" in page
+    assert 'id="demo-confirm-dialog"' in page
+    assert 'id="demo-confirm-accept"' in page
+    assert 'id="demo-confirm-cancel"' in page
     assert 'class="intro-text-link"' in page
     assert 'href="#queue-form"' in page
     assert "Add one or more labels (up to five)" in page

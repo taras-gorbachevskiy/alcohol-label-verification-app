@@ -95,6 +95,9 @@
   const newQueueButton = document.getElementById("new-queue-button");
   const loadDemoButton = document.getElementById("load-demo-button");
   const demoLoadStatus = document.getElementById("demo-load-status");
+  const demoConfirmDialog = document.getElementById("demo-confirm-dialog");
+  const demoConfirmAccept = document.getElementById("demo-confirm-accept");
+  const demoConfirmCancel = document.getElementById("demo-confirm-cancel");
 
   /** @type {{ id: number, file: File, application: Record<string, string> }[]} */
   let queue = [];
@@ -983,10 +986,33 @@
     );
   }
 
+  function openDemoConfirmDialog() {
+    if (demoLoading || checking) {
+      return;
+    }
+    if (typeof demoConfirmDialog.showModal === "function") {
+      if (!demoConfirmDialog.open) {
+        demoConfirmDialog.showModal();
+      }
+    } else {
+      demoConfirmDialog.setAttribute("open", "");
+    }
+    demoConfirmAccept.focus();
+  }
+
+  function closeDemoConfirmDialog() {
+    if (typeof demoConfirmDialog.close === "function" && demoConfirmDialog.open) {
+      demoConfirmDialog.close();
+    } else {
+      demoConfirmDialog.removeAttribute("open");
+    }
+  }
+
   async function loadDemoLabels() {
     if (demoLoading || checking) {
       return;
     }
+    closeDemoConfirmDialog();
     const hadQueueItems = queue.length > 0;
     demoLoading = true;
     applyControlLock();
@@ -1094,7 +1120,19 @@
     if (loadDemoButton.getAttribute("aria-disabled") === "true") {
       return;
     }
+    openDemoConfirmDialog();
+  });
+  demoConfirmAccept.addEventListener("click", () => {
     void loadDemoLabels();
+  });
+  demoConfirmCancel.addEventListener("click", () => {
+    closeDemoConfirmDialog();
+    loadDemoButton.focus();
+  });
+  demoConfirmDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeDemoConfirmDialog();
+    loadDemoButton.focus();
   });
 
   form.addEventListener("submit", async (event) => {

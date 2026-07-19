@@ -75,10 +75,11 @@ extracted label text. Measured stage and browser timings are in
   item back); Check is blocked while the form is dirty or mid-edit. *Why:*
   Prevents silently dropping a label; keeps one large form on screen for
   senior-friendly use.
-- **Inline demo seed.** “Load 3 demo labels” fills the queue from
-  [`app/static/demo/`](app/static/demo/) (JSON + JPEGs). *Why:* Zero-instruction
-  live demo; those assets ship with the Docker image (`COPY app`), while local
-  `samples/` stay out of production.
+- **Inline demo seed.** “Load 3 demo labels” asks for confirmation, then fills
+  the queue from [`app/static/demo/`](app/static/demo/) (JSON + JPEGs). *Why:*
+  Zero-instruction live demo without silently wiping a queue in progress; assets
+  ship with the Docker image (`COPY app`), while local `samples/` stay out of
+  production.
 - **Independent batch items.** A bad sibling becomes `UNABLE_TO_VERIFY`; other
   labels still verify; response order and summary counts stay aligned. *Why:*
   One bad photo must not block the rest of the batch.

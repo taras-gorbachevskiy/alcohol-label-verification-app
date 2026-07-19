@@ -66,6 +66,21 @@ function createPage(fetchImpl, { captureTimeout = false } = {}) {
   window.URL.revokeObjectURL = () => {};
   window.HTMLElement.prototype.scrollIntoView = () => {};
   window.scrollTo = () => {};
+  if (window.HTMLDialogElement) {
+    const proto = window.HTMLDialogElement.prototype;
+    if (typeof proto.showModal !== "function") {
+      proto.showModal = function showModal() {
+        this.setAttribute("open", "");
+        this.open = true;
+      };
+    }
+    if (typeof proto.close !== "function") {
+      proto.close = function close() {
+        this.removeAttribute("open");
+        this.open = false;
+      };
+    }
+  }
   if (captureTimeout) {
     window.setTimeout = (callback) => {
       timeoutCallbacks.push(callback);
@@ -150,6 +165,15 @@ function checkLabels(page) {
   page.document.getElementById("queue-form").dispatchEvent(
     new page.window.Event("submit", { bubbles: true, cancelable: true }),
   );
+}
+
+function openDemoConfirm(page) {
+  page.document.getElementById("load-demo-button").click();
+}
+
+function confirmDemoLoad(page) {
+  openDemoConfirm(page);
+  page.document.getElementById("demo-confirm-accept").click();
 }
 
 const DEMO_SCENARIOS = [
@@ -297,7 +321,7 @@ test("load demo labels fills the queue for batch check", async () => {
     }),
   );
 
-  page.document.getElementById("load-demo-button").click();
+  confirmDemoLoad(page);
   await waitFor(
     () => page.document.querySelectorAll(".queue-item").length === 3,
   );
@@ -333,7 +357,7 @@ test("load demo labels shows a readable error when assets fail", async () => {
     response({ error: { code: "MISSING", message: "gone", field: null } }, { status: 404 }),
   );
 
-  page.document.getElementById("load-demo-button").click();
+  confirmDemoLoad(page);
   const errorSummary = page.document.getElementById("error-summary");
   await waitFor(() => !errorSummary.hidden);
 
@@ -616,7 +640,7 @@ test("demo load disables check until finished and replaces an existing queue", a
   addToQueue(page, 1);
   assert.equal(page.document.getElementById("check-button").disabled, false);
 
-  page.document.getElementById("load-demo-button").click();
+  confirmDemoLoad(page);
   await waitFor(() => page.document.getElementById("check-button").disabled);
   assert.equal(page.document.getElementById("add-to-queue-button").disabled, true);
   assert.equal(typeof releaseManifest, "function");
@@ -632,6 +656,24 @@ test("demo load disables check until finished and replaces an existing queue", a
   );
   assert.equal(page.document.getElementById("check-button").disabled, false);
   assert.equal(page.document.getElementById("add-to-queue-button").disabled, false);
+  page.dom.window.close();
+});
+
+test("demo load confirm cancel keeps the existing queue", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+
+  openDemoConfirm(page);
+  const dialog = page.document.getElementById("demo-confirm-dialog");
+  assert.equal(dialog.open || dialog.hasAttribute("open"), true);
+  assert.match(dialog.textContent, /replaces any labels/i);
+
+  page.document.getElementById("demo-confirm-cancel").click();
+
+  assert.equal(dialog.open || dialog.hasAttribute("open"), false);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.equal(page.document.activeElement, page.document.getElementById("load-demo-button"));
   page.dom.window.close();
 });
 
