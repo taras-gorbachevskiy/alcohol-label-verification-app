@@ -12,7 +12,7 @@ preprocess ≤1280px at quality 82, measured warm click-to-result p95 about
 
 ## Live demo
 
-**Deployed URL:** https://ttb-label-verification-production-c242.up.railway.app/
+**Deployed URL:** [https://ttb-label-verification-production-c242.up.railway.app/](https://ttb-label-verification-production-c242.up.railway.app/)
 
 Try:
 
@@ -38,8 +38,8 @@ quickly; that is expected. For local parity with the demo sample image, use
 | ABV, net contents | Normalized numeric units |
 | Government warning | **Exact, case-sensitive** string match |
 
-Any field FAIL ⇒ overall verdict `NEEDS_REVIEW` (UI: Needs Review). All PASS ⇒
-`PASS` (UI: Approved).
+Any field FAIL ⇒ overall verdict `NEEDS_REVIEW` (UI: Needs review). All PASS ⇒
+`PASS` (UI: Passed).
 
 **Batch:** one to five ordered images + applications. Each label is validated
 and verified independently; a bad sibling becomes `UNABLE_TO_VERIFY` without
@@ -61,6 +61,57 @@ Stateless and in-memory (rate limits reset on deploy). Logs record status,
 latency, and error codes only—never application values, image bytes, or
 extracted label text. Measured stage and browser timings are in
 [docs/acceptance.md](docs/acceptance.md).
+
+## Design decisions
+
+- **Queue-only UI (not separate Single + Batch screens).** Compose → Add to
+  Queue → Check Labels; the browser always calls `POST /verify/batch` with one
+  to five items (a single label is just a one-item queue). *Why:* Batch is a
+  hard product requirement; one flow is simpler for non-technical users than
+  mode switching, and still covers the single-label case.
+- **Edit pulls into compose, with dirty guards.** Edit removes a queued label
+  into the open form until Update Queue; Check is blocked while the form is
+  dirty or mid-edit. *Why:* Prevents silently dropping a label; keeps one
+  large form on screen for senior-friendly use.
+- **Inline demo seed.** “Load 3 demo labels” fills the queue from
+  [`app/static/demo/`](app/static/demo/) (JSON + JPEGs). *Why:* Zero-instruction
+  live demo; those assets ship with the Docker image (`COPY app`), while local
+  `samples/` stay out of production.
+- **Independent batch items.** A bad sibling becomes `UNABLE_TO_VERIFY`; other
+  labels still verify; response order and summary counts stay aligned. *Why:*
+  One bad photo must not block the rest of the batch.
+- **Concurrent batch under a shared deadline.** Labels are prepared and
+  vision-extracted in parallel with a ~4.8s shared processing budget. *Why:*
+  The whole request—not each label in series—must stay under the five-second
+  product target.
+- **Exact warning vs fuzzy/normalized fields.** Government warning uses
+  case-sensitive string equality; brand/class/producer are fuzzy (≥85); country
+  uses synonyms; ABV (±0.05) and net contents use numeric/unit normalization.
+  *Why:* The warning is regulatory-strict; OCR and layout noise on other
+  fields should not force false FAILs.
+- **Conservative warning exactness.** Comparison is full case-sensitive
+  equality on the post-processed string (newlines → spaces only—not a looser
+  whitespace collapse). If the model is uncertain, or the extracted warning is
+  not an exact match to the expected TTB text, extraction stores `null`
+  (never invented wording). *Why:* Prefer “missing” / FAIL over a near-miss
+  that could false-PASS an exact match.
+- **Slim extracted payload.** `ExtractedLabel` carries only the seven compared
+  fields—no `raw_text` dump and no `extraction_confidence` score. *Why:* Keeps
+  the API and UI focused on field-level PASS/FAIL; confidence is already
+  reflected by nulls and per-field status, and raw OCR text is not needed for
+  the PoC decision.
+- **Latency-first vision stack.** Pinned `gpt-4.1-mini` with structured
+  outputs, JPEG preprocess ≤1280px at quality 82 (client and server; skip
+  redundant re-encode when already bounded), ~4s provider timeout, no retries.
+  *Why:* Meet the under-five-seconds budget; fail fast rather than retry into
+  the deadline. Measured evidence:
+  [docs/acceptance.md](docs/acceptance.md).
+- **In-memory abuse controls.** Per-process rate and concurrency limits; a
+  batch charges one unit per label. *Why:* Protect free-tier vision spend
+  without a database (limits reset on deploy; one replica assumed).
+- **Stateless slim runtime.** No database; API keys only from environment /
+  Railway Variables; Docker image copies `app/` only. *Why:* Small free-tier
+  footprint and no secrets or demo packs outside `app/` in the image.
 
 ## Tools
 
@@ -85,8 +136,8 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --env-file .env
 
 Open:
 
-- App: http://127.0.0.1:8000/
-- Health: http://127.0.0.1:8000/health
+- App: [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
+- Health: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
 
 Tests:
 
@@ -130,7 +181,14 @@ scaling replicas.
 
 ## Limitations
 
-- Batch accepts at most five labels per request (not peak-season hundreds).
+- **Batch scale.** The UI and API accept at most five labels per request so
+  the shared latency budget and free-tier vision spend stay viable. Dumps of
+  hundreds of applications would need a different intake model (queues, async
+  jobs, or multi-request workflows)—out of scope.
+- **Outbound cloud vision.** Extraction calls the OpenAI API over the public
+  internet. That works on Railway; a locked-down agency network that blocks
+  those endpoints would need a private/VNet path or an on-prem model before
+  agents could use the tool.
 - Imperfect warning areas often extract as `null` → warning FAIL /
   `NEEDS_REVIEW` rather than a guessed string.
 - Accuracy and latency depend on the cloud vision model and network.
@@ -144,8 +202,8 @@ scaling replicas.
 - Commit only [`.env.example`](.env.example) (with `OPENAI_API_KEY=` empty).
 - Real `.env` is gitignored—never stage it.
 - Production secrets live in the Railway Variables UI only.
-- The browser never receives `OPENAI_API_KEY`; it only calls same-origin
-  `/verify` and `/verify/batch`.
+- The browser never receives `OPENAI_API_KEY`; the UI only calls same-origin
+  `POST /verify/batch` (the single-label `POST /verify` API remains available).
 
 ## Project layout
 
