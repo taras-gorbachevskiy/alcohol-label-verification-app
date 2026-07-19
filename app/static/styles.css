@@ -102,49 +102,131 @@ h1 {
   letter-spacing: -0.025em;
 }
 
+.intro-lead,
 .intro p {
-  max-width: 38rem;
+  max-width: 48rem;
   margin-bottom: 0;
   color: var(--muted);
   font-size: 1.25rem;
 }
 
-.mode-picker {
+.intro-text-link {
+  color: var(--blue-dark);
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  white-space: nowrap;
+}
+
+.intro-text-link:hover,
+.intro-text-link:focus-visible {
+  color: var(--blue);
+}
+
+.intro-text-link.is-disabled,
+.intro-text-link[aria-disabled="true"] {
+  color: #7a8794;
+  pointer-events: none;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.demo-load-status {
+  margin: 0.85rem 0 0;
+  color: var(--navy-dark);
+  font-weight: 700;
+}
+
+.queue-panel {
   margin-bottom: 1.5rem;
-  padding: 1.25rem;
+  padding: clamp(1.25rem, 4vw, 2rem);
   border: 2px solid #c1c9d1;
   border-radius: 0.75rem;
   background: var(--surface);
+  box-shadow: var(--shadow);
 }
 
-.mode-picker h2 {
-  margin-bottom: 0.8rem;
+.queue-panel h2 {
+  margin-bottom: 0.5rem;
   color: var(--navy-dark);
-  font-size: 1.35rem;
+  font-size: 1.65rem;
 }
 
-.mode-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
+.queue-help,
+.queue-limit-note {
+  margin-bottom: 1.25rem;
+  color: var(--muted);
 }
 
-.mode-button {
-  min-height: 3.75rem;
-  padding: 0.75rem 1rem;
-  border: 3px solid var(--blue);
+.queue-limit-note {
+  margin-top: 1rem;
+  margin-bottom: 0;
+  padding: 0.85rem 1rem;
+  border: 2px solid var(--blue);
   border-radius: 0.5rem;
-  color: var(--blue-dark);
-  background: #ffffff;
-  font: inherit;
-  font-size: 1.2rem;
-  font-weight: 800;
-  cursor: pointer;
+  color: var(--navy-dark);
+  background: #eef5fb;
+  font-weight: 700;
 }
 
-.mode-button.selected {
-  color: #ffffff;
-  background: var(--navy);
+.queue-list {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  border: 2px solid #c1c9d1;
+  border-radius: 0.5rem;
+  background: #ffffff;
+}
+
+.queue-item-info {
+  display: grid;
+  gap: 0.2rem;
+  min-width: min(100%, 16rem);
+}
+
+.queue-item-title {
+  color: var(--navy-dark);
+  font-size: 1.25rem;
+}
+
+.queue-item-file {
+  color: var(--muted);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.queue-item-status {
+  color: var(--success);
+  font-weight: 800;
+}
+
+.queue-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.queue-item-actions .secondary-button,
+.queue-item-actions .remove-label-button {
+  min-width: 7.5rem;
+  width: auto;
+  margin: 0;
+}
+
+.compose-card > .secondary-button {
+  width: 100%;
+  margin: 1.5rem 0 0;
 }
 
 .card,
@@ -424,6 +506,10 @@ textarea[aria-invalid="true"] {
 .primary-button:disabled {
   color: #ffffff;
   background: #52616f;
+  cursor: not-allowed;
+}
+
+.primary-button.is-loading:disabled {
   cursor: wait;
 }
 
@@ -508,10 +594,17 @@ textarea[aria-invalid="true"] {
   color: var(--review);
 }
 
-.verdict p:last-child {
+.verdict #verdict-summary {
   margin-bottom: 0;
   font-size: 1.2rem;
   font-weight: 700;
+}
+
+.result-timing {
+  margin: 0.85rem 0 0;
+  color: var(--navy-dark);
+  font-size: 1.15rem;
+  font-weight: 800;
 }
 
 .results-heading {
@@ -529,6 +622,10 @@ textarea[aria-invalid="true"] {
   margin-bottom: 0;
   color: var(--navy-dark);
   font-size: 2rem;
+}
+
+.batch-results-heading .result-timing {
+  margin-top: 0.65rem;
 }
 
 .summary-grid {
@@ -589,12 +686,12 @@ textarea[aria-invalid="true"] {
   border: 3px solid var(--review);
 }
 
-.batch-result-item.pass .status {
+.batch-result-item.pass > summary .status {
   color: var(--success);
 }
 
-.batch-result-item.needs-review .status,
-.batch-result-item.unable-to-verify .status {
+.batch-result-item.needs-review > summary .status,
+.batch-result-item.unable-to-verify > summary .status {
   color: var(--review);
 }
 
@@ -761,12 +858,16 @@ textarea[aria-invalid="true"] {
     margin-top: 0.65rem;
   }
 
-  .mode-buttons,
-  .batch-result-actions {
+  .batch-result-actions,
+  .queue-item-actions {
     grid-template-columns: 1fr;
   }
 
-  .batch-card-heading,
+  .queue-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .batch-result-item summary {
     align-items: stretch;
     flex-direction: column;

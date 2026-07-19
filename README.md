@@ -16,12 +16,13 @@ preprocess ≤1280px at quality 82, measured warm click-to-result p95 about
 
 Try:
 
-1. Open the site → **Single label** → upload a label photo and enter the seven
-   expected values → submit → read `APPROVED` or `NEEDS REVIEW` plus per-field
-   PASS/FAIL.
-2. Switch to **Batch** → add two or more labels → confirm each item stays
-   independently viewable in the summary.
-3. Submit a non-image file → you should get plain-language guidance (not a
+1. Open the site → **Load 3 demo labels** (under the intro) → **Check 3 Labels** → read the
+   summary and per-label drill-down (plus “Checked N labels in X seconds”).
+2. Or choose a label photo and enter the seven expected values → **Add to
+   Queue** → **Check 1 Label** → read PASS/FAIL per field.
+3. Add several labels to the queue (up to five) → **Check N Labels** → confirm
+   each item stays independently viewable in the summary.
+4. Choose a non-image file → you should get plain-language guidance (not a
    stack trace).
 
 Public abuse controls may return HTTP `429` with a wait message if you submit

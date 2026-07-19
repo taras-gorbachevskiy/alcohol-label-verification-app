@@ -100,7 +100,7 @@ function batchPayload(items) {
     },
     items: items.map((item, index) => ({
       index,
-      filename: `batch-label-${index + 1}.jpg`,
+      filename: `label-${index + 1}.jpg`,
       status: item.status,
       result:
         item.status === "UNABLE_TO_VERIFY"
@@ -122,35 +122,15 @@ function batchPayload(items) {
   };
 }
 
-function openBatch(page) {
-  page.document.getElementById("batch-mode-button").click();
-  return [...page.document.querySelectorAll(".batch-card")];
-}
-
-function fillBatchCard(page, card, index) {
-  const cardId = card.dataset.cardId;
+function fillCompose(page, index = 1) {
   for (const key of FIELD_KEYS) {
-    page.document.getElementById(`batch-${cardId}-${key}`).value =
-      `batch ${index} ${key}`;
+    page.document.getElementById(key).value = `label ${index} ${key}`;
   }
-  const file = new page.window.File([`jpeg-${index}`], `batch-label-${index}.jpg`, {
-    type: "image/jpeg",
-  });
-  const image = page.document.getElementById(`batch-${cardId}-image`);
-  Object.defineProperty(image, "files", {
-    configurable: true,
-    value: [file],
-  });
-  image.dispatchEvent(new page.window.Event("change", { bubbles: true }));
-}
-
-function fillForm(page) {
-  for (const key of FIELD_KEYS) {
-    page.document.getElementById(key).value = `entered ${key}`;
-  }
-  const file = new page.window.File(["jpeg-data"], "label.jpg", {
-    type: "image/jpeg",
-  });
+  const file = new page.window.File(
+    [`jpeg-${index}`],
+    `label-${index}.jpg`,
+    { type: "image/jpeg" },
+  );
   const image = page.document.getElementById("image");
   Object.defineProperty(image, "files", {
     configurable: true,
@@ -160,10 +140,69 @@ function fillForm(page) {
   return file;
 }
 
-function submit(page) {
-  page.document.getElementById("verification-form").dispatchEvent(
+function addToQueue(page, index = 1) {
+  const file = fillCompose(page, index);
+  page.document.getElementById("add-to-queue-button").click();
+  return file;
+}
+
+function checkLabels(page) {
+  page.document.getElementById("queue-form").dispatchEvent(
     new page.window.Event("submit", { bubbles: true, cancelable: true }),
   );
+}
+
+const DEMO_SCENARIOS = [
+  {
+    id: "01-clean-exact-match",
+    image: "01-clean-exact-match.jpg",
+    application: Object.fromEntries(
+      FIELD_KEYS.map((key) => [key, `demo-1 ${key}`]),
+    ),
+  },
+  {
+    id: "03-brand-mismatch",
+    image: "01-clean-exact-match.jpg",
+    application: Object.fromEntries(
+      FIELD_KEYS.map((key) => [
+        key,
+        key === "brand" ? "NOT THE LABEL BRAND" : `demo-2 ${key}`,
+      ]),
+    ),
+  },
+  {
+    id: "07-imperfect-blur",
+    image: "03-imperfect-blur.jpg",
+    application: Object.fromEntries(
+      FIELD_KEYS.map((key) => [key, `demo-3 ${key}`]),
+    ),
+  },
+];
+
+function demoAwareFetch(verifyImpl) {
+  return async (url, options) => {
+    if (url === "/static/demo/scenarios.json") {
+      return response(DEMO_SCENARIOS);
+    }
+    if (String(url).startsWith("/static/demo/")) {
+      return {
+        ok: true,
+        status: 200,
+        async blob() {
+          return new Blob([`bytes-for-${url}`], { type: "image/jpeg" });
+        },
+        async json() {
+          return {};
+        },
+        headers: {
+          get() {
+            return null;
+          },
+        },
+      };
+    }
+    return verifyImpl(url, options);
+  };
 }
 
 async function waitFor(predicate, message = "condition was not met") {
@@ -186,9 +225,9 @@ async function assertNoAxeViolations(page, state) {
     },
   });
   const violations = result.violations.map((violation) => ({
-      id: violation.id,
-      targets: violation.nodes.map((node) => node.target),
-    }));
+    id: violation.id,
+    targets: violation.nodes.map((node) => node.target),
+  }));
   assert.equal(
     JSON.stringify(violations),
     "[]",
@@ -196,61 +235,365 @@ async function assertNoAxeViolations(page, state) {
   );
 }
 
-test("successful verification replaces the form with one clear result action", async () => {
+test("one queued label checks through batch and shows timing", async () => {
   let request = null;
   const page = createPage(async (url, options) => {
     request = { url, options };
     return response(
-      verificationPayload({ verdict: "NEEDS_REVIEW", failedField: "brand" }),
+      batchPayload([{ status: "NEEDS_REVIEW" }]),
     );
   });
-  fillForm(page);
+  addToQueue(page, 1);
 
-  submit(page);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.match(
+    page.document.getElementById("check-button-text").textContent,
+    /Check 1 Label/,
+  );
+  assert.equal(page.document.getElementById("check-button").disabled, false);
+
+  checkLabels(page);
   await waitFor(() => !page.document.getElementById("results").hidden);
 
-  const form = page.document.getElementById("verification-form");
+  const form = page.document.getElementById("queue-form");
   const results = page.document.getElementById("results");
   assert.equal(form.hidden, true);
   assert.equal(results.hidden, false);
   assert.equal(page.document.activeElement, results);
   assert.match(results.dataset.clickToResultMs, /^\d+$/);
-  assert.match(results.textContent, /NEEDS REVIEW/);
+  assert.match(results.textContent, /Needs review/);
+  assert.match(results.textContent, /Checked in \d+\.\d+ seconds\./);
   assert.match(results.textContent, /Brand name/);
   assert.match(results.textContent, /brand name does not match/i);
-  assert.match(results.textContent, /Should say/);
-  assert.match(results.textContent, /expected brand/);
-  assert.match(results.textContent, /Label says/);
-  assert.match(results.textContent, /found brand/);
-  assert.equal(page.document.querySelectorAll("#start-over-button").length, 1);
-  assert.equal(request.url, "/verify");
+  assert.equal(request.url, "/verify/batch");
   assert.equal(request.options.method, "POST");
-  assert.equal(request.options.body.get("image").name, "label.jpg");
+  assert.equal(request.options.body.getAll("images").length, 1);
   assert.equal(
-    JSON.parse(request.options.body.get("application")).brand,
-    "entered brand",
+    JSON.parse(request.options.body.get("applications"))[0].brand,
+    "label 1 brand",
   );
 
-  page.document.getElementById("start-over-button").click();
+  page.document.getElementById("new-queue-button").click();
   assert.equal(form.hidden, false);
   assert.equal(results.hidden, true);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 0);
   assert.equal(page.document.getElementById("brand").value, "");
   assert.equal(page.document.activeElement, page.document.getElementById("image"));
   page.dom.window.close();
 });
 
-test("all matching fields render a prominent approved verdict", async () => {
-  const page = createPage(async () => response(verificationPayload()));
-  fillForm(page);
+test("load demo labels fills the queue for batch check", async () => {
+  let request = null;
+  const page = createPage(
+    demoAwareFetch(async (url, options) => {
+      request = { url, options };
+      return response(
+        batchPayload([
+          { status: "PASS" },
+          { status: "NEEDS_REVIEW" },
+          { status: "PASS" },
+        ]),
+      );
+    }),
+  );
 
-  submit(page);
+  page.document.getElementById("load-demo-button").click();
+  await waitFor(
+    () => page.document.querySelectorAll(".queue-item").length === 3,
+  );
+
+  assert.match(
+    page.document.getElementById("demo-load-status").textContent,
+    /Loaded 3 demo labels/i,
+  );
+  assert.match(
+    page.document.getElementById("check-button-text").textContent,
+    /Check 3 Labels/,
+  );
+  assert.equal(page.document.activeElement, page.document.getElementById("check-button"));
+
+  checkLabels(page);
   await waitFor(() => !page.document.getElementById("results").hidden);
 
+  assert.equal(request.url, "/verify/batch");
+  assert.equal(request.options.body.getAll("images").length, 3);
+  assert.equal(
+    JSON.parse(request.options.body.get("applications"))[1].brand,
+    "NOT THE LABEL BRAND",
+  );
+  assert.match(
+    page.document.getElementById("results").textContent,
+    /Checked 3 labels in \d+\.\d+ seconds\./,
+  );
+  page.dom.window.close();
+});
+
+test("load demo labels shows a readable error when assets fail", async () => {
+  const page = createPage(async () =>
+    response({ error: { code: "MISSING", message: "gone", field: null } }, { status: 404 }),
+  );
+
+  page.document.getElementById("load-demo-button").click();
+  const errorSummary = page.document.getElementById("error-summary");
+  await waitFor(() => !errorSummary.hidden);
+
+  assert.match(errorSummary.textContent, /Could not load demo labels/i);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 0);
+  page.dom.window.close();
+});
+
+test("three mixed labels render summary and drill-down", async () => {
+  let request = null;
+  const page = createPage(async (url, options) => {
+    request = { url, options };
+    return response(
+      batchPayload([
+        { status: "PASS" },
+        { status: "NEEDS_REVIEW" },
+        { status: "UNABLE_TO_VERIFY", code: "INVALID_IMAGE" },
+      ]),
+    );
+  });
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+  addToQueue(page, 3);
+
+  assert.match(
+    page.document.getElementById("check-button-text").textContent,
+    /Check 3 Labels/,
+  );
+
+  checkLabels(page);
+  await waitFor(() => !page.document.getElementById("results").hidden);
+
+  assert.equal(request.url, "/verify/batch");
+  assert.equal(request.options.body.getAll("images").length, 3);
+  assert.equal(
+    JSON.parse(request.options.body.get("applications"))[2].brand,
+    "label 3 brand",
+  );
+  assert.match(page.document.getElementById("summary").textContent, /Passed\s*1/);
+  assert.match(page.document.getElementById("summary").textContent, /Needs review\s*1/);
+  assert.match(
+    page.document.getElementById("summary").textContent,
+    /Unable to verify\s*1/,
+  );
   const results = page.document.getElementById("results");
-  assert.match(results.textContent, /APPROVED/);
-  assert.match(results.textContent, /All 7 items match/);
-  assert.equal(results.querySelectorAll(".result-item.pass").length, 7);
-  assert.equal(page.document.getElementById("verification-form").hidden, true);
+  assert.match(results.textContent, /Checked 3 labels in \d+\.\d+ seconds\./);
+  const details = page.document.querySelectorAll(".batch-result-item");
+  assert.equal(details.length, 3);
+  assert.equal(details[0].open, true);
+  assert.match(details[0].textContent, /Unable to verify|Label 3/i);
+
+  page.document.getElementById("return-button").click();
+  assert.equal(page.document.getElementById("queue-form").hidden, false);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 3);
+  page.dom.window.close();
+});
+
+test("queue starts empty with one compose card and caps at five", () => {
+  const page = createPage(async () => response({}));
+
+  assert.equal(page.document.getElementById("queue-panel").hidden, true);
+  assert.equal(page.document.getElementById("compose-card").hidden, false);
+  assert.equal(page.document.getElementById("check-button").disabled, true);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 0);
+
+  for (let index = 1; index <= 5; index += 1) {
+    addToQueue(page, index);
+  }
+
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 5);
+  assert.equal(page.document.getElementById("compose-card").hidden, true);
+  assert.equal(page.document.getElementById("queue-limit-note").hidden, false);
+  assert.match(
+    page.document.getElementById("check-button-text").textContent,
+    /Check 5 Labels/,
+  );
+
+  page.document.querySelector(".queue-remove").click();
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 4);
+  assert.equal(page.document.getElementById("compose-card").hidden, false);
+  page.dom.window.close();
+});
+
+test("edit moves a queued label back into compose", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+
+  page.document.querySelector(".queue-edit").click();
+
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.equal(page.document.getElementById("compose-card").hidden, false);
+  assert.equal(page.document.getElementById("brand").value, "label 1 brand");
+  assert.match(
+    page.document.getElementById("compose-heading").textContent,
+    /Edit label/i,
+  );
+  assert.match(
+    page.document.getElementById("add-to-queue-button").textContent,
+    /Update Queue/i,
+  );
+
+  page.document.getElementById("brand").value = "updated brand";
+  const file = new page.window.File(["jpeg-edit"], "edited.jpg", {
+    type: "image/jpeg",
+  });
+  const image = page.document.getElementById("image");
+  Object.defineProperty(image, "files", {
+    configurable: true,
+    value: [file],
+  });
+  page.document.getElementById("add-to-queue-button").click();
+
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.match(page.document.getElementById("queue-list").textContent, /edited\.jpg/);
+  page.dom.window.close();
+});
+
+test("edit then check without update is blocked and keeps the draft", async () => {
+  let fetchCalls = 0;
+  const page = createPage(async () => {
+    fetchCalls += 1;
+    return response(batchPayload([{ status: "PASS" }, { status: "PASS" }]));
+  });
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+  addToQueue(page, 3);
+
+  page.document.querySelectorAll(".queue-edit")[1].click();
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.equal(page.document.getElementById("brand").value, "label 2 brand");
+
+  checkLabels(page);
+  await waitFor(() => !page.document.getElementById("error-summary").hidden);
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.equal(page.document.getElementById("brand").value, "label 2 brand");
+  assert.match(
+    page.document.getElementById("error-summary").textContent,
+    /Update Queue or clear the form before checking/i,
+  );
+  page.dom.window.close();
+});
+
+test("edit then edit another label is blocked and keeps the first draft", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+
+  page.document.querySelector(".queue-edit").click();
+  assert.equal(page.document.getElementById("brand").value, "label 1 brand");
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+
+  page.document.querySelector(".queue-edit").click();
+
+  assert.equal(page.document.getElementById("brand").value, "label 1 brand");
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.match(
+    page.document.getElementById("error-summary").textContent,
+    /before editing another label/i,
+  );
+  page.dom.window.close();
+});
+
+test("edit then update keeps the original queue order", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+  addToQueue(page, 3);
+
+  page.document.querySelectorAll(".queue-edit")[1].click();
+  const file = new page.window.File(["jpeg-mid"], "label-2-updated.jpg", {
+    type: "image/jpeg",
+  });
+  Object.defineProperty(page.document.getElementById("image"), "files", {
+    configurable: true,
+    value: [file],
+  });
+  page.document.getElementById("add-to-queue-button").click();
+
+  const names = [...page.document.querySelectorAll(".queue-item-file")].map(
+    (node) => node.textContent,
+  );
+  assert.deepEqual(names, [
+    "label-1.jpg",
+    "label-2-updated.jpg",
+    "label-3.jpg",
+  ]);
+  page.dom.window.close();
+});
+
+test("dirty compose blocks check until queued or cleared", async () => {
+  let fetchCalls = 0;
+  const page = createPage(async () => {
+    fetchCalls += 1;
+    return response(batchPayload([{ status: "PASS" }]));
+  });
+  addToQueue(page, 1);
+  fillCompose(page, 2);
+
+  checkLabels(page);
+  await waitFor(() => !page.document.getElementById("error-summary").hidden);
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.match(
+    page.document.getElementById("error-summary").textContent,
+    /Add to Queue or clear the form before checking/i,
+  );
+  page.dom.window.close();
+});
+
+test("demo load disables check until finished and replaces an existing queue", async () => {
+  let releaseManifest;
+  const page = createPage(async (url) => {
+    if (url === "/static/demo/scenarios.json") {
+      await new Promise((resolve) => {
+        releaseManifest = resolve;
+      });
+      return response(DEMO_SCENARIOS);
+    }
+    if (String(url).startsWith("/static/demo/")) {
+      return {
+        ok: true,
+        status: 200,
+        async blob() {
+          return new Blob([`bytes-for-${url}`], { type: "image/jpeg" });
+        },
+        async json() {
+          return {};
+        },
+        headers: {
+          get() {
+            return null;
+          },
+        },
+      };
+    }
+    return response(batchPayload([{ status: "PASS" }]));
+  });
+  addToQueue(page, 1);
+  assert.equal(page.document.getElementById("check-button").disabled, false);
+
+  page.document.getElementById("load-demo-button").click();
+  await waitFor(() => page.document.getElementById("check-button").disabled);
+  assert.equal(page.document.getElementById("add-to-queue-button").disabled, true);
+  assert.equal(typeof releaseManifest, "function");
+
+  releaseManifest();
+  await waitFor(
+    () => page.document.querySelectorAll(".queue-item").length === 3,
+  );
+
+  assert.match(
+    page.document.getElementById("demo-load-status").textContent,
+    /Replaced your queue with 3 demo labels/i,
+  );
+  assert.equal(page.document.getElementById("check-button").disabled, false);
+  assert.equal(page.document.getElementById("add-to-queue-button").disabled, false);
   page.dom.window.close();
 });
 
@@ -274,7 +617,7 @@ for (const testCase of [
     status: 503,
     code: "VERIFICATION_UNAVAILABLE",
     retryAfter: null,
-    message: /information is still here/i,
+    message: /queue is still here/i,
   },
   {
     name: "oversized request",
@@ -284,7 +627,7 @@ for (const testCase of [
     message: /photo smaller than 20 MB/i,
   },
 ]) {
-  test(`${testCase.name} is readable and preserves the complete form`, async () => {
+  test(`${testCase.name} is readable and preserves the queue`, async () => {
     const page = createPage(async () =>
       response(
         {
@@ -302,113 +645,118 @@ for (const testCase of [
         },
       ),
     );
-    const selectedFile = fillForm(page);
+    addToQueue(page, 1);
 
-    submit(page);
+    checkLabels(page);
     const errorSummary = page.document.getElementById("error-summary");
     await waitFor(() => !errorSummary.hidden);
 
     assert.match(errorSummary.textContent, testCase.message);
-    assert.equal(page.document.getElementById("verification-form").hidden, false);
-    assert.equal(page.document.getElementById("brand").value, "entered brand");
-    assert.equal(page.document.getElementById("image").files[0], selectedFile);
+    assert.equal(page.document.getElementById("queue-form").hidden, false);
+    assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
     assert.equal(page.document.activeElement, errorSummary);
     page.dom.window.close();
   });
 }
 
-test("request timeout is readable and preserves entries", async () => {
+test("request timeout is readable and preserves the queue", async () => {
+  let fetchStarted = false;
   const page = createPage(
-    (_url, options) =>
-      new Promise((_resolve, reject) => {
+    (_url, options) => {
+      fetchStarted = true;
+      return new Promise((_resolve, reject) => {
         options.signal.addEventListener("abort", () => {
           reject(new page.window.DOMException("timed out", "AbortError"));
         });
-      }),
+      });
+    },
     { captureTimeout: true },
   );
-  const selectedFile = fillForm(page);
+  addToQueue(page, 1);
 
-  submit(page);
-  await waitFor(() => page.document.getElementById("submit-button").disabled);
+  checkLabels(page);
+  await waitFor(() => fetchStarted);
   page.runTimeout();
   const errorSummary = page.document.getElementById("error-summary");
   await waitFor(() => !errorSummary.hidden);
 
   assert.match(errorSummary.textContent, /taking longer than expected/i);
-  assert.equal(page.document.getElementById("brand").value, "entered brand");
-  assert.equal(page.document.getElementById("image").files[0], selectedFile);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
   page.dom.window.close();
 });
 
-test("field validation error focuses the field and preserves the form", async () => {
+test("API field error shows a readable summary and keeps the queue", async () => {
   const page = createPage(async () =>
     response(
       {
         error: {
           code: "APPLICATION_FIELD_TOO_LONG",
           message: "Use 2,000 characters or fewer.",
-          field: "application.brand",
+          field: "applications[0].brand",
         },
       },
       { status: 422 },
     ),
   );
-  fillForm(page);
+  addToQueue(page, 1);
 
-  submit(page);
-  await waitFor(
-    () => !page.document.getElementById("brand-error").hidden,
-  );
+  checkLabels(page);
+  const errorSummary = page.document.getElementById("error-summary");
+  await waitFor(() => !errorSummary.hidden);
 
-  assert.match(page.document.getElementById("brand-error").textContent, /2,000/);
-  assert.equal(page.document.activeElement, page.document.getElementById("brand"));
-  assert.equal(page.document.getElementById("brand").value, "entered brand");
+  assert.match(errorSummary.textContent, /2,000/);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
   page.dom.window.close();
 });
 
 const invalidPayloads = {
   "missing field": (() => {
-    const payload = verificationPayload();
-    payload.fields.pop();
+    const payload = batchPayload([{ status: "PASS" }]);
+    payload.items[0].result.fields.pop();
     return payload;
   })(),
   "duplicate field": (() => {
-    const payload = verificationPayload();
-    payload.fields[6] = { ...payload.fields[0] };
+    const payload = batchPayload([{ status: "PASS" }]);
+    payload.items[0].result.fields[6] = {
+      ...payload.items[0].result.fields[0],
+    };
     return payload;
   })(),
   "unknown field": (() => {
-    const payload = verificationPayload();
-    payload.fields[6].field = "unknown";
+    const payload = batchPayload([{ status: "PASS" }]);
+    payload.items[0].result.fields[6].field = "unknown";
     return payload;
   })(),
   "invalid actual value": (() => {
-    const payload = verificationPayload();
-    payload.fields[0].actual = { unsafe: true };
+    const payload = batchPayload([{ status: "PASS" }]);
+    payload.items[0].result.fields[0].actual = { unsafe: true };
     return payload;
   })(),
   "invalid score value": (() => {
-    const payload = verificationPayload();
-    payload.fields[0].score = "high";
+    const payload = batchPayload([{ status: "PASS" }]);
+    payload.items[0].result.fields[0].score = "high";
     return payload;
   })(),
   "invalid detail value": (() => {
-    const payload = verificationPayload();
-    payload.fields[0].detail = ["unexpected"];
+    const payload = batchPayload([{ status: "PASS" }]);
+    payload.items[0].result.fields[0].detail = ["unexpected"];
     return payload;
   })(),
-  "invalid latency value": {
-    ...verificationPayload(),
-    latency_ms: "fast",
-  },
-  "verdict inconsistent with fields": {
-    ...verificationPayload(),
-    verdict: "NEEDS_REVIEW",
-  },
+  "invalid latency value": (() => {
+    const payload = batchPayload([{ status: "PASS" }]);
+    payload.latency_ms = "fast";
+    return payload;
+  })(),
+  "verdict inconsistent with fields": (() => {
+    const payload = batchPayload([{ status: "PASS" }]);
+    payload.items[0].result.verdict = "NEEDS_REVIEW";
+    payload.items[0].status = "NEEDS_REVIEW";
+    return payload;
+  })(),
   "fields out of order": (() => {
-    const payload = verificationPayload();
-    [payload.fields[0], payload.fields[1]] = [payload.fields[1], payload.fields[0]];
+    const payload = batchPayload([{ status: "PASS" }]);
+    const fields = payload.items[0].result.fields;
+    [fields[0], fields[1]] = [fields[1], fields[0]];
     return payload;
   })(),
 };
@@ -416,160 +764,120 @@ const invalidPayloads = {
 for (const [name, payload] of Object.entries(invalidPayloads)) {
   test(`invalid response (${name}) renders a generic error`, async () => {
     const page = createPage(async () => response(payload));
-    fillForm(page);
+    addToQueue(page, 1);
 
-    submit(page);
+    checkLabels(page);
     const errorSummary = page.document.getElementById("error-summary");
     await waitFor(() => !errorSummary.hidden);
 
-    assert.match(errorSummary.textContent, /information is still here/i);
-    assert.equal(page.document.getElementById("verification-form").hidden, false);
+    assert.match(errorSummary.textContent, /queue is still here/i);
+    assert.equal(page.document.getElementById("queue-form").hidden, false);
     assert.equal(page.document.getElementById("results").hidden, true);
     page.dom.window.close();
   });
 }
 
-test("batch mode starts with two cards and is bounded at five", () => {
-  const page = createPage(async () => response({}));
-  let cards = openBatch(page);
-
-  assert.equal(page.document.getElementById("verification-form").hidden, true);
-  assert.equal(page.document.getElementById("batch-form").hidden, false);
-  assert.equal(cards.length, 2);
-  assert.equal(page.document.querySelectorAll(".remove-label-button:not([hidden])").length, 0);
-
-  page.document.getElementById("add-label-button").click();
-  page.document.getElementById("add-label-button").click();
-  page.document.getElementById("add-label-button").click();
-  cards = [...page.document.querySelectorAll(".batch-card")];
-  assert.equal(cards.length, 5);
-  assert.equal(page.document.getElementById("add-label-button").hidden, true);
-
-  cards[2].querySelector(".remove-label-button").click();
-  cards = [...page.document.querySelectorAll(".batch-card")];
-  assert.equal(cards.length, 4);
-  assert.deepEqual(
-    cards.map((card) => card.querySelector(".batch-card-title").textContent),
-    ["Label 1", "Label 2", "Label 3", "Label 4"],
-  );
-  page.dom.window.close();
-});
-
-test("batch submission preserves pairing and renders every drill-down", async () => {
-  let request = null;
-  const payload = batchPayload([
-    { status: "PASS" },
-    { status: "UNABLE_TO_VERIFY", code: "INVALID_IMAGE" },
-  ]);
-  const page = createPage(async (url, options) => {
-    request = { url, options };
-    return response(payload);
-  });
-  const cards = openBatch(page);
-  cards.forEach((card, index) => fillBatchCard(page, card, index + 1));
-
-  page.document.getElementById("batch-form").dispatchEvent(
-    new page.window.Event("submit", { bubbles: true, cancelable: true }),
-  );
-  await waitFor(() => !page.document.getElementById("batch-results").hidden);
-
-  assert.equal(request.url, "/verify/batch");
-  assert.equal(request.options.body.getAll("images").length, 2);
-  assert.equal(
-    JSON.parse(request.options.body.get("applications"))[1].brand,
-    "batch 2 brand",
-  );
-  assert.match(page.document.getElementById("batch-summary").textContent, /Passed\s*1/);
-  assert.match(
-    page.document.getElementById("batch-summary").textContent,
-    /Unable to verify\s*1/,
-  );
-  const details = page.document.querySelectorAll(".batch-result-item");
-  assert.equal(details.length, 2);
-  assert.equal(details[0].open, true);
-  assert.match(details[0].textContent, /Label 2/);
-  assert.match(details[1].textContent, /Label 1/);
-  assert.equal(page.document.activeElement, page.document.getElementById("batch-results"));
-
-  page.document.getElementById("edit-batch-button").click();
-  assert.equal(page.document.getElementById("batch-form").hidden, false);
-  assert.equal(cards[0].querySelector('input[type="file"]').files.length, 1);
-  page.dom.window.close();
-});
-
-test("batch progress appears only after the delay", async () => {
+test("check progress appears only after the delay", async () => {
   let resolveFetch;
+  let fetchStarted = false;
   const page = createPage(
-    () =>
-      new Promise((resolve) => {
+    () => {
+      fetchStarted = true;
+      return new Promise((resolve) => {
         resolveFetch = resolve;
-      }),
+      });
+    },
     { captureTimeout: true },
   );
-  const cards = openBatch(page);
-  cards.forEach((card, index) => fillBatchCard(page, card, index + 1));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
 
-  page.document.getElementById("batch-form").dispatchEvent(
-    new page.window.Event("submit", { bubbles: true, cancelable: true }),
-  );
-  await waitFor(() => page.document.getElementById("batch-submit-button").disabled);
-  assert.equal(page.document.getElementById("batch-progress").hidden, true);
+  checkLabels(page);
+  await waitFor(() => fetchStarted);
+  assert.equal(page.document.getElementById("check-progress").hidden, true);
   page.runTimeout(1);
-  assert.equal(page.document.getElementById("batch-progress").hidden, false);
-  assert.match(page.document.getElementById("batch-progress").textContent, /Checking 2 labels/);
+  assert.equal(page.document.getElementById("check-progress").hidden, false);
+  assert.match(
+    page.document.getElementById("check-progress").textContent,
+    /Checking 2 labels/,
+  );
 
   await waitFor(() => typeof resolveFetch === "function");
   resolveFetch(response(batchPayload([{ status: "PASS" }, { status: "PASS" }])));
-  await waitFor(() => !page.document.getElementById("batch-results").hidden);
-  assert.equal(page.document.getElementById("batch-progress").hidden, true);
+  await waitFor(() => !page.document.getElementById("results").hidden);
+  assert.equal(page.document.getElementById("check-progress").hidden, true);
   page.dom.window.close();
 });
 
-test("empty submission focuses the photo and makes no request", () => {
+test("empty queue check makes no request", () => {
   let fetchCalls = 0;
   const page = createPage(async () => {
     fetchCalls += 1;
     return response({});
   });
 
-  submit(page);
+  checkLabels(page);
 
   assert.equal(fetchCalls, 0);
-  assert.equal(page.document.activeElement, page.document.getElementById("image"));
-  assert.match(page.document.getElementById("error-summary").textContent, /fix 8 items/i);
+  assert.match(
+    page.document.getElementById("error-summary").textContent,
+    /at least one label/i,
+  );
   page.dom.window.close();
 });
 
-test("wrong file type is rejected before fetch and preserves entries", () => {
+test("incomplete compose is rejected before queueing", () => {
   let fetchCalls = 0;
   const page = createPage(async () => {
     fetchCalls += 1;
     return response({});
   });
-  fillForm(page);
+
+  page.document.getElementById("add-to-queue-button").click();
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 0);
+  assert.equal(page.document.activeElement, page.document.getElementById("image"));
+  assert.match(
+    page.document.getElementById("error-summary").textContent,
+    /fix \d+ items/i,
+  );
+  page.dom.window.close();
+});
+
+test("wrong file type is rejected before queueing and preserves entries", () => {
+  const page = createPage(async () => response({}));
+  fillCompose(page, 1);
   const image = page.document.getElementById("image");
   Object.defineProperty(image, "files", {
     configurable: true,
     value: [new page.window.File(["text"], "label.txt", { type: "text/plain" })],
   });
 
-  submit(page);
+  page.document.getElementById("add-to-queue-button").click();
 
-  assert.equal(fetchCalls, 0);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 0);
   assert.equal(page.document.activeElement, image);
-  assert.equal(page.document.getElementById("brand").value, "entered brand");
-  assert.match(page.document.getElementById("image-error").textContent, /JPG, PNG, or WebP/);
+  assert.equal(page.document.getElementById("brand").value, "label 1 brand");
+  assert.match(
+    page.document.getElementById("image-error").textContent,
+    /JPG, PNG, or WebP/,
+  );
   page.dom.window.close();
 });
 
-test("large supported image is optimized before single-label upload", async () => {
+test("large supported image is optimized before batch upload", async () => {
   let request;
   const page = createPage(async (url, options) => {
     request = { url, options };
-    return response(verificationPayload());
+    return response(batchPayload([{ status: "PASS" }]));
   });
-  fillForm(page);
-  page.window.createImageBitmap = async () => ({ width: 2400, height: 1200, close() {} });
+  addToQueue(page, 1);
+  page.window.createImageBitmap = async () => ({
+    width: 2400,
+    height: 1200,
+    close() {},
+  });
   page.window.HTMLCanvasElement.prototype.getContext = () => ({
     fillStyle: "",
     fillRect() {},
@@ -579,85 +887,51 @@ test("large supported image is optimized before single-label upload", async () =
     callback(new page.window.Blob(["optimized-jpeg"], { type }));
   };
 
-  submit(page);
+  checkLabels(page);
   await waitFor(() => request !== undefined);
 
-  const uploaded = request.options.body.get("image");
+  const uploaded = request.options.body.getAll("images")[0];
   assert.equal(uploaded.type, "image/jpeg");
   assert.equal(uploaded.size, "optimized-jpeg".length);
   page.dom.window.close();
 });
 
-test("batch API field path focuses the exact card and field", async () => {
-  const page = createPage(async () =>
-    response(
-      {
-        error: {
-          code: "INVALID_APPLICATION",
-          message: "Brand name must be text.",
-          field: "applications[1].brand",
-        },
-      },
-      { status: 422 },
-    ),
-  );
-  const cards = openBatch(page);
-  cards.forEach((card, index) => fillBatchCard(page, card, index + 1));
-
-  page.document.getElementById("batch-form").dispatchEvent(
-    new page.window.Event("submit", { bubbles: true, cancelable: true }),
-  );
-  const target = cards[1].querySelector('input[name="brand"]');
-  await waitFor(() => page.document.activeElement === target);
-
-  assert.equal(target.getAttribute("aria-invalid"), "true");
-  assert.match(page.document.getElementById(`${target.id}-error`).textContent, /must be text/i);
-  page.dom.window.close();
-});
-
-test("dynamic batch warning has programmatic help and error descriptions", () => {
+test("compose warning has programmatic help and error descriptions", () => {
   const page = createPage(async () => response({}));
-  const card = openBatch(page)[0];
-  const warning = card.querySelector('textarea[name="government_warning"]');
+  const warning = page.document.getElementById("government_warning");
   const describedBy = warning.getAttribute("aria-describedby").split(" ");
 
   assert.equal(describedBy.length, 2);
   assert.ok(describedBy.every((id) => page.document.getElementById(id)));
-  assert.match(page.document.getElementById(describedBy[0]).textContent, /Copy this exactly/);
+  assert.match(
+    page.document.getElementById(describedBy[0]).textContent,
+    /Copy it exactly/,
+  );
   page.dom.window.close();
 });
 
 test("automated accessibility scan passes every required UI state", async () => {
   const emptyPage = createPage(async () => response({}));
   await assertNoAxeViolations(emptyPage, "empty state");
-  submit(emptyPage);
-  await assertNoAxeViolations(emptyPage, "error state");
+  emptyPage.document.getElementById("add-to-queue-button").click();
+  await assertNoAxeViolations(emptyPage, "compose error state");
   emptyPage.dom.window.close();
 
   const loadingPage = createPage(() => new Promise(() => {}));
-  fillForm(loadingPage);
-  submit(loadingPage);
-  await waitFor(() => loadingPage.document.getElementById("submit-button").disabled);
+  addToQueue(loadingPage, 1);
+  checkLabels(loadingPage);
+  await waitFor(() => loadingPage.document.getElementById("check-button").disabled);
   await assertNoAxeViolations(loadingPage, "loading state");
   loadingPage.dom.window.close();
 
-  const resultPage = createPage(async () => response(verificationPayload()));
-  fillForm(resultPage);
-  submit(resultPage);
-  await waitFor(() => !resultPage.document.getElementById("results").hidden);
-  await assertNoAxeViolations(resultPage, "single-result state");
-  resultPage.dom.window.close();
-
-  const batchPage = createPage(async () =>
+  const resultPage = createPage(async () =>
     response(batchPayload([{ status: "PASS" }, { status: "NEEDS_REVIEW" }])),
   );
-  const cards = openBatch(batchPage);
-  await assertNoAxeViolations(batchPage, "batch state");
-  cards.forEach((card, index) => fillBatchCard(batchPage, card, index + 1));
-  batchPage.document.getElementById("batch-form").dispatchEvent(
-    new batchPage.window.Event("submit", { bubbles: true, cancelable: true }),
-  );
-  await waitFor(() => !batchPage.document.getElementById("batch-results").hidden);
-  await assertNoAxeViolations(batchPage, "batch drill-down state");
-  batchPage.dom.window.close();
+  addToQueue(resultPage, 1);
+  await assertNoAxeViolations(resultPage, "queued state");
+  addToQueue(resultPage, 2);
+  checkLabels(resultPage);
+  await waitFor(() => !resultPage.document.getElementById("results").hidden);
+  await assertNoAxeViolations(resultPage, "results drill-down state");
+  resultPage.dom.window.close();
 });

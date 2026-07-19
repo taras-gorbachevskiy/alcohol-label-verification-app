@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#12304a" />
-    <title>Check an Alcohol Label</title>
+    <title>Check Alcohol Labels</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/app.js" defer></script>
   </head>
@@ -18,35 +18,20 @@
 
     <main class="page-width" id="main-content">
       <div class="intro">
-        <h1>Check an Alcohol Label</h1>
-        <p>Check one label or a batch of up to five labels.</p>
+        <h1>Check Alcohol Labels</h1>
+        <p class="intro-lead">
+          Add one or more labels (up to five), then check them all at once.
+          <a
+            class="intro-text-link"
+            id="load-demo-button"
+            href="#queue-form"
+            >Load 3 demo labels</a
+          >
+        </p>
+        <p class="demo-load-status" id="demo-load-status" role="status" hidden></p>
       </div>
 
-      <section class="mode-picker" aria-labelledby="mode-heading">
-        <h2 id="mode-heading">How many labels do you want to check?</h2>
-        <div class="mode-buttons">
-          <button
-            class="mode-button selected"
-            id="single-mode-button"
-            type="button"
-            aria-pressed="true"
-            aria-controls="verification-form"
-          >
-            Single label
-          </button>
-          <button
-            class="mode-button"
-            id="batch-mode-button"
-            type="button"
-            aria-pressed="false"
-            aria-controls="batch-form"
-          >
-            Batch
-          </button>
-        </div>
-      </section>
-
-      <form id="verification-form" novalidate autocomplete="off">
+      <form id="queue-form" novalidate autocomplete="off">
         <section
           class="error-summary"
           id="error-summary"
@@ -58,12 +43,34 @@
           <p id="error-summary-message"></p>
         </section>
 
-        <section class="card" aria-labelledby="photo-heading">
+        <section
+          class="queue-panel"
+          id="queue-panel"
+          aria-labelledby="queue-heading"
+          hidden
+        >
+          <h2 id="queue-heading">Queued labels</h2>
+          <p class="queue-help" id="queue-help">
+            These labels are ready. You can edit or remove one before checking.
+          </p>
+          <ul class="queue-list" id="queue-list"></ul>
+        </section>
+
+        <section
+          class="card compose-card"
+          id="compose-card"
+          aria-labelledby="compose-heading"
+        >
           <div class="section-heading">
-            <span class="step-number" aria-hidden="true">1</span>
+            <span class="step-number" id="compose-step-number" aria-hidden="true"
+              >1</span
+            >
             <div>
-              <h2 id="photo-heading">Choose label photo</h2>
-              <p>Most phone photos work. Use a JPG, PNG, or WebP under 20 MB.</p>
+              <h2 id="compose-heading">Add a label</h2>
+              <p id="compose-help">
+                Choose a photo and enter the seven expected values, then add it
+                to the queue.
+              </p>
             </div>
           </div>
 
@@ -83,20 +90,8 @@
             </p>
           </div>
           <p class="field-error" id="image-error" hidden></p>
-
-          <figure class="photo-preview" id="photo-preview" hidden>
+          <div class="photo-preview" id="photo-preview" hidden>
             <img id="preview-image" alt="Selected label photo" />
-            <figcaption>Selected label photo</figcaption>
-          </figure>
-        </section>
-
-        <section class="card" aria-labelledby="details-heading">
-          <div class="section-heading">
-            <span class="step-number" aria-hidden="true">2</span>
-            <div>
-              <h2 id="details-heading">What should the label say?</h2>
-              <p>Enter the information you expect to see on the label.</p>
-            </div>
           </div>
 
           <div class="field">
@@ -204,51 +199,30 @@
             ></textarea>
             <p class="field-error" id="government_warning-error" hidden></p>
           </div>
-        </section>
 
-        <div class="action-bar">
-          <button class="primary-button" id="submit-button" type="submit">
-            <span class="button-spinner" aria-hidden="true"></span>
-            <span id="submit-button-text">Check Label</span>
+          <button class="secondary-button" id="add-to-queue-button" type="button">
+            Add to Queue
           </button>
-          <p class="loading-status" id="loading-status" role="status" hidden>
-            Checking the photo. This usually takes less than 5 seconds.
+          <p class="queue-limit-note" id="queue-limit-note" role="status" hidden>
+            You already have five labels queued. Check them, or remove one to add
+            another.
           </p>
-        </div>
-      </form>
-
-      <form id="batch-form" novalidate autocomplete="off" hidden>
-        <section
-          class="error-summary"
-          id="batch-error-summary"
-          role="alert"
-          tabindex="-1"
-          hidden
-        >
-          <h2 id="batch-error-title">Check the labels below</h2>
-          <p id="batch-error-message"></p>
         </section>
 
-        <div id="batch-cards"></div>
-
-        <button class="secondary-button add-label-button" id="add-label-button" type="button">
-          + Add Another Label
-        </button>
-
         <div class="action-bar">
-          <button class="primary-button" id="batch-submit-button" type="submit">
+          <button class="primary-button" id="check-button" type="submit" disabled>
             <span class="button-spinner" aria-hidden="true"></span>
-            <span id="batch-submit-text">Check Batch</span>
+            <span id="check-button-text">Check Labels</span>
           </button>
-          <div class="batch-progress" id="batch-progress" role="status" hidden>
-            <progress aria-label="Batch verification in progress"></progress>
-            <p id="batch-progress-text">Checking labels…</p>
+          <div class="batch-progress" id="check-progress" role="status" hidden>
+            <progress aria-label="Label verification in progress"></progress>
+            <p id="check-progress-text">Checking labels…</p>
           </div>
         </div>
       </form>
 
       <section
-        class="results"
+        class="results batch-results"
         id="results"
         aria-labelledby="results-title"
         aria-live="polite"
@@ -256,44 +230,22 @@
         tabindex="-1"
         hidden
       >
-        <div class="verdict" id="verdict">
-          <p class="verdict-label">Verification result</p>
-          <h2 id="results-title"></h2>
-          <p id="verdict-summary"></p>
-        </div>
-
-        <h2 class="results-heading">Field results</h2>
-        <ul class="result-list" id="result-list"></ul>
-
-        <button class="secondary-button" id="start-over-button" type="button">
-          Check Another Label
-        </button>
-      </section>
-
-      <section
-        class="results batch-results"
-        id="batch-results"
-        aria-labelledby="batch-results-title"
-        aria-live="polite"
-        aria-atomic="true"
-        tabindex="-1"
-        hidden
-      >
         <div class="batch-results-heading">
-          <p class="verdict-label">Batch verification result</p>
-          <h2 id="batch-results-title">Batch Summary</h2>
+          <p class="verdict-label">Verification result</p>
+          <h2 id="results-title">Results</h2>
+          <p class="result-timing" id="result-timing" hidden></p>
         </div>
 
-        <dl class="summary-grid" id="batch-summary"></dl>
+        <dl class="summary-grid" id="summary"></dl>
         <h2 class="results-heading">Individual labels</h2>
-        <div class="batch-result-list" id="batch-result-list"></div>
+        <div class="batch-result-list" id="result-list"></div>
 
         <div class="batch-result-actions">
-          <button class="secondary-button" id="edit-batch-button" type="button">
-            Return to This Batch
+          <button class="secondary-button" id="return-button" type="button">
+            Return to Queue
           </button>
-          <button class="secondary-button" id="new-batch-button" type="button">
-            Start a New Batch
+          <button class="secondary-button" id="new-queue-button" type="button">
+            Start Over
           </button>
         </div>
       </section>
