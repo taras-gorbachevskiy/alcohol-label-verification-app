@@ -158,7 +158,7 @@ def test_verify_fuzzy_failure_surfaces_expected_and_found(
     assert brand["actual"] == "OTHER BRAND"
 
 
-def test_verify_warning_failure_surfaces_extracted_warning_verbatim(
+def test_verify_warning_failure_degrades_guessed_warning_to_missing(
     client: TestClient,
     mocked_vision: MagicMock,
 ) -> None:
@@ -178,10 +178,10 @@ def test_verify_warning_failure_surfaces_extracted_warning_verbatim(
     assert response.json()["verdict"] == "NEEDS_REVIEW"
     assert warning["status"] == "FAIL"
     assert warning["expected"] == ALL_CAPS_WARNING
-    assert warning["actual"] == extracted_warning
+    assert warning["actual"] is None
 
 
-def test_verify_warning_whitespace_change_fails_exact_match(
+def test_verify_warning_line_wrap_normalizes_before_guard(
     client: TestClient,
     mocked_vision: MagicMock,
 ) -> None:
@@ -198,10 +198,10 @@ def test_verify_warning_whitespace_change_fails_exact_match(
         for result in response.json()["fields"]
         if result["field"] == "government_warning"
     )
-    assert response.json()["verdict"] == "NEEDS_REVIEW"
-    assert warning["status"] == "FAIL"
+    assert response.json()["verdict"] == "PASS"
+    assert warning["status"] == "PASS"
     assert warning["expected"] == ALL_CAPS_WARNING
-    assert warning["actual"] == extracted_warning
+    assert warning["actual"] == ALL_CAPS_WARNING
 
 
 def test_verify_soft_empty_extraction_returns_all_missing_failures(
@@ -338,6 +338,32 @@ def test_verify_rejects_wrong_types_and_unknown_fields(
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "INVALID_APPLICATION"
+    mocked_vision.extract_preprocessed.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("application", "field", "message"),
+    [
+        (_application(brand=123), "application.brand", "Brand name must be text."),
+        (
+            {**_application(), "unexpected": "value"},
+            "application.unexpected",
+            "Remove the unexpected application field.",
+        ),
+    ],
+)
+def test_verify_returns_precise_application_validation_guidance(
+    client: TestClient,
+    mocked_vision: MagicMock,
+    application: dict[str, object],
+    field: str,
+    message: str,
+) -> None:
+    response = _post(client, image_bytes=_image_bytes(), application=application)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["field"] == field
+    assert response.json()["error"]["message"] == message
     mocked_vision.extract_preprocessed.assert_not_called()
 
 
@@ -492,7 +518,7 @@ def test_verify_rejects_overlong_application_field_before_vision(
     assert response.status_code == 422
     assert response.json()["error"] == {
         "code": "APPLICATION_FIELD_TOO_LONG",
-        "message": "Use 2,000 characters or fewer for each application field.",
+        "message": "Brand name must be 2,000 characters or fewer.",
         "field": "application.brand",
     }
     assert app.state.verify_limiter.snapshot().global_attempts == 0
@@ -666,6 +692,11 @@ def test_verify_returns_and_logs_deterministic_latency(
     assert "latency_ms=123.45" in caplog.text
     assert "within_budget=True" in caplog.text
     assert "verdict=PASS" in caplog.text
+    assert "preprocess_ms=" in caplog.text
+    assert "provider_ms=" in caplog.text
+    assert "compare_ms=" in caplog.text
+    assert "source_bytes=" in caplog.text
+    assert "processed_bytes=" in caplog.text
 
 
 def test_verify_logs_warning_when_five_second_budget_is_exceeded(

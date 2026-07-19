@@ -15,6 +15,11 @@ def test_abv_noisy_alc_vol_proof_passes() -> None:
     assert result.actual == "45% Alc./Vol. (90 Proof)"
 
 
+def test_brief_bare_45_vs_full_alc_vol_and_proof_passes() -> None:
+    result = compare_abv("45", "45% Alc./Vol. (90 Proof)")
+    assert result.status == "PASS"
+
+
 def test_abv_within_tolerance_passes() -> None:
     result = compare_abv("40.0%", "40.02")
     assert result.status == "PASS"

@@ -12,12 +12,19 @@ TTB label verification proof-of-concept. One FastAPI process, same-origin UI (no
 | HTTP `POST /verify` | Done (Phase 3) — validated multipart orchestration |
 | Single-label UI at `/` | Done (Phase 4) — accessible upload, results, errors, and abuse protection |
 | Batch API and UI | Done (Phase 5) — isolated, concurrent verification for up to five labels |
+| Hardening | Done (Phase 6) — deployed checklist passed; 30 warm runs p95 2.677s, maximum 3.203s |
 
 **Phase 1 library:** compare typed application data vs an extracted label across brand, class/type, producer, country, ABV, net contents, and government warning. Fuzzy/normalized matching for most fields; **government warning is an exact, case-sensitive match**. Any field `FAIL` ⇒ overall verdict `NEEDS_REVIEW`.
 
 Entry points: `from app.comparison import compare_labels`, `from app.vision import VisionService`.
 
-**Phase 2 library:** orient, bound, and preprocess an image (JPEG ≤1536px) → OpenAI `gpt-4o-mini` typed structured output → `ExtractedLabel`. Locally invalid photos return an all-null extraction for library callers. Provider outages, refusals, and malformed provider responses raise `VisionUnavailableError` so the HTTP API cannot mistake a failed extraction for seven missing label fields. Tests use an injected mock or `FakeVisionService` (no live API).
+**Phase 2 library:** orient, bound, and preprocess an image (JPEG ≤1280px,
+quality 82) → pinned OpenAI `gpt-4.1-mini-2025-04-14` typed structured
+output → `ExtractedLabel`. Locally invalid photos return an all-null extraction
+for library callers. Provider outages, refusals, and malformed provider
+responses raise `VisionUnavailableError` so the HTTP API cannot mistake a
+failed extraction for seven missing label fields. Tests use an injected mock or
+`FakeVisionService` (no live API).
 
 **Phase 3 API:** `POST /verify` accepts a JPEG, PNG, or WebP `image` plus an
 `application` JSON multipart field. All seven application fields are required
@@ -97,9 +104,33 @@ only for labels that reach the vision provider.
 # Live smoke against samples/sample_label.jpg (needs OPENAI_API_KEY in .env)
 uv run python scripts/extract_sample.py
 
-# Full opt-in accuracy/latency check, including degraded variants
+# Sample accuracy/latency check, including deterministic degraded variants
 uv run python scripts/extract_sample.py --runs 3 --variants
+
+# Private corpus check (benchmark-private/ is gitignored)
+uv run python scripts/extract_sample.py --corpus benchmark-private --variants \
+  --json-output benchmark-reports/final.json
+
+# Screen the three image profiles, two prompts, and pinned model candidates
+uv run python scripts/extract_sample.py --corpus benchmark-private --matrix
 ```
+
+The private corpus directory contains `manifest.json` following
+`samples/benchmark-manifest.example.json` and 10–20 permissioned label images.
+The benchmark prints only aggregate timings, byte counts, null flags, and field
+match statuses—never image data or extracted/expected label text. Its gates are:
+provider p95 ≤3.6 seconds, every local extraction under 5 seconds, processed
+payload p95 ≤1 MiB, 100% clean-label/warning correctness, ≥95% readable
+non-warning accuracy on mild degradations, exact-or-null degraded warnings, and
+zero false passes on the severe crop case. Deployed browser acceptance remains
+the authoritative speed check: 30 warm click-to-result runs at p95 ≤4.5 seconds
+with every run under 5 seconds, plus five cold-start runs under 5 seconds.
+Successful single-label submissions expose the privacy-safe duration as the
+`single-label-click-to-result` browser performance measure and the numeric
+`data-click-to-result-ms` attribute on the result region.
+
+The deployed checklist, tuning decision, and measured stage/browser percentiles
+are recorded in [`docs/acceptance.md`](docs/acceptance.md).
 
 ## Prerequisites
 

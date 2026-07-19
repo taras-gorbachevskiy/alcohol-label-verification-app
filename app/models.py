@@ -6,6 +6,24 @@ FieldStatus = Literal["PASS", "FAIL"]
 Verdict = Literal["PASS", "NEEDS_REVIEW"]
 BatchItemStatus = Literal["PASS", "NEEDS_REVIEW", "UNABLE_TO_VERIFY"]
 MAX_APPLICATION_FIELD_CHARS = 2_000
+VERIFICATION_FIELDS = (
+    "brand",
+    "class_type",
+    "producer",
+    "country",
+    "abv",
+    "net_contents",
+    "government_warning",
+)
+VerificationField = Literal[
+    "brand",
+    "class_type",
+    "producer",
+    "country",
+    "abv",
+    "net_contents",
+    "government_warning",
+]
 
 
 class ApplicationData(BaseModel):
@@ -43,41 +61,71 @@ class VerificationApplicationData(BaseModel):
 
 
 class ExtractedLabel(BaseModel):
-    brand: str | None = None
-    class_type: str | None = None
-    producer: str | None = None
-    country: str | None = None
-    abv: str | None = None
-    net_contents: str | None = None
-    government_warning: str | None = None
+    """Strict structured output accepted from the vision provider."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    brand: str | None = Field(default=None, max_length=MAX_APPLICATION_FIELD_CHARS)
+    class_type: str | None = Field(default=None, max_length=MAX_APPLICATION_FIELD_CHARS)
+    producer: str | None = Field(default=None, max_length=MAX_APPLICATION_FIELD_CHARS)
+    country: str | None = Field(default=None, max_length=MAX_APPLICATION_FIELD_CHARS)
+    abv: str | None = Field(default=None, max_length=MAX_APPLICATION_FIELD_CHARS)
+    net_contents: str | None = Field(default=None, max_length=MAX_APPLICATION_FIELD_CHARS)
+    government_warning: str | None = Field(
+        default=None,
+        max_length=MAX_APPLICATION_FIELD_CHARS,
+    )
 
 
 class FieldResult(BaseModel):
-    field: str
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    field: VerificationField
     status: FieldStatus
-    expected: str | None = None
-    actual: str | None = None
-    score: float | None = None
-    detail: str | None = None
+    expected: str | None = Field(default=None, max_length=MAX_APPLICATION_FIELD_CHARS)
+    actual: str | None = Field(default=None, max_length=MAX_APPLICATION_FIELD_CHARS)
+    score: float | None = Field(default=None, ge=0, le=100)
+    detail: str | None = Field(default=None, max_length=1_000)
 
 
 class VerificationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     verdict: Verdict
-    fields: list[FieldResult] = Field(default_factory=list)
+    fields: list[FieldResult] = Field(min_length=7, max_length=7)
     latency_ms: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def require_complete_consistent_fields(self) -> "VerificationResult":
+        if tuple(result.field for result in self.fields) != VERIFICATION_FIELDS:
+            raise ValueError("verification fields must contain the seven ordered fields")
+        expected_verdict = (
+            "NEEDS_REVIEW"
+            if any(result.status == "FAIL" for result in self.fields)
+            else "PASS"
+        )
+        if self.verdict != expected_verdict:
+            raise ValueError("verification verdict must match field statuses")
+        return self
 
 
 class ErrorDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     code: str
-    message: str
-    field: str | None = None
+    message: str = Field(min_length=1, max_length=1_000)
+    field: str | None = Field(default=None, max_length=128)
 
 
 class ErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     error: ErrorDetail
 
 
 class BatchSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     passed: int = Field(ge=0)
     needs_review: int = Field(ge=0)
     unable_to_verify: int = Field(ge=0)
@@ -91,8 +139,10 @@ class BatchSummary(BaseModel):
 
 
 class BatchItemResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     index: int = Field(ge=0, le=4)
-    filename: str
+    filename: str = Field(min_length=1, max_length=255)
     status: BatchItemStatus
     result: VerificationResult | None = None
     error: ErrorDetail | None = None
@@ -111,6 +161,8 @@ class BatchItemResult(BaseModel):
 
 
 class BatchVerificationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     summary: BatchSummary
     items: list[BatchItemResult] = Field(min_length=1, max_length=5)
     latency_ms: float = Field(ge=0)

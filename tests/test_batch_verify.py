@@ -152,7 +152,9 @@ def test_batch_isolates_invalid_images_applications_and_provider_errors() -> Non
         "NEEDS_REVIEW",
     ]
     assert body["items"][1]["error"]["code"] == "INVALID_APPLICATION"
+    assert body["items"][1]["error"]["field"] == "applications[1].brand"
     assert body["items"][2]["error"]["code"] == "INVALID_IMAGE"
+    assert body["items"][2]["error"]["field"] == "images[2]"
     assert body["items"][3]["error"]["code"] == "VERIFICATION_UNAVAILABLE"
     assert "provider detail" not in response.text
     assert service.calls == 3

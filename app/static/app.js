@@ -2,7 +2,10 @@
   "use strict";
 
   const MAX_FILE_BYTES = 20 * 1024 * 1024;
-  const REQUEST_TIMEOUT_MS = 15_000;
+  const REQUEST_TIMEOUT_MS = 6_000;
+  const CLIENT_MAX_LONG_SIDE = 1280;
+  const CLIENT_JPEG_QUALITY = 0.82;
+  const CLIENT_TARGET_BYTES = 1024 * 1024;
   const SUPPORTED_IMAGE_TYPES = new Set([
     "image/jpeg",
     "image/png",
@@ -147,6 +150,54 @@
     return null;
   }
 
+  async function optimizedUpload(file) {
+    if (!file || typeof window.createImageBitmap !== "function") {
+      return file;
+    }
+    let bitmap;
+    try {
+      const started = window.performance?.now?.() ?? 0;
+      bitmap = await window.createImageBitmap(file, { imageOrientation: "from-image" });
+      const scale = Math.min(1, CLIENT_MAX_LONG_SIDE / Math.max(bitmap.width, bitmap.height));
+      if (scale === 1 && file.size <= CLIENT_TARGET_BYTES) {
+        return file;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context || typeof canvas.toBlob !== "function") {
+        return file;
+      }
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", CLIENT_JPEG_QUALITY),
+      );
+      if (!blob) {
+        return file;
+      }
+      const ended = window.performance?.now?.() ?? started;
+      try {
+        window.performance?.measure?.("label-image-preprocess", {
+          start: started,
+          end: ended,
+        });
+      } catch (_unsupportedPerformanceApi) {
+        // Image optimization is more important than optional browser telemetry.
+      }
+      return new File([blob], file.name, {
+        type: "image/jpeg",
+        lastModified: file.lastModified,
+      });
+    } catch (_error) {
+      return file;
+    } finally {
+      bitmap?.close?.();
+    }
+  }
+
   function validateForm() {
     clearErrors();
     const issues = [];
@@ -212,7 +263,7 @@
     return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
   }
 
-  function friendlyApiError(code, fieldName, retryAfter) {
+  function friendlyApiError(code, fieldName, retryAfter, serverMessage = null) {
     const wait = retryWaitDescription(retryAfter);
     if (code === "RATE_LIMITED") {
       return wait
@@ -227,11 +278,22 @@
 
     const messages = {
       MISSING_SUBMISSION: "Choose a label photo and complete all seven items.",
+      MISSING_BATCH_SUBMISSION:
+        "Choose a photo and complete all seven items for every label.",
       EMPTY_APPLICATION: "Complete all seven items, then check the label again.",
+      EMPTY_BATCH_APPLICATIONS:
+        "Complete all seven items for every label, then check the batch again.",
       INVALID_APPLICATION_JSON: "Check all seven items and try again.",
+      INVALID_BATCH_JSON: "Check every label’s information and try again.",
       INVALID_APPLICATION: "Check all seven items and try again.",
+      INVALID_BATCH_APPLICATIONS:
+        "Check every label’s information and try again.",
       APPLICATION_FIELD_TOO_LONG:
         "This entry is too long. Use 2,000 characters or fewer.",
+      EMPTY_BATCH: "Add at least one label before checking the batch.",
+      BATCH_SIZE_EXCEEDED: "Use no more than five labels in one batch.",
+      BATCH_PAIR_COUNT_MISMATCH:
+        "Choose exactly one photo for each label in the batch.",
       INVALID_MULTIPART: "We could not read this submission. Please try again.",
       REQUEST_TOO_LARGE:
         "This upload is too large. Choose a photo smaller than 20 MB.",
@@ -245,8 +307,12 @@
         "We couldn’t check this label. Your information is still here. Please try again.",
     };
 
-    if (code === "APPLICATION_FIELD_TOO_LONG") {
-      return messages[code];
+    if (
+      ["INVALID_APPLICATION", "APPLICATION_FIELD_TOO_LONG"].includes(code) &&
+      typeof serverMessage === "string" &&
+      serverMessage.trim()
+    ) {
+      return serverMessage;
     }
 
     if (fieldName?.startsWith("application.")) {
@@ -288,6 +354,7 @@
         error.apiError.code,
         error.apiError.field,
         error.retryAfter,
+        error.apiError.message,
       );
       key = apiFieldKey(error.apiError.field);
     } else {
@@ -321,11 +388,15 @@
     }
 
     const seen = new Set();
-    for (const result of payload.fields) {
+    for (const [index, result] of payload.fields.entries()) {
       if (!result || typeof result !== "object") {
         return false;
       }
-      if (!fieldByKey.has(result.field) || seen.has(result.field)) {
+      if (
+        !fieldByKey.has(result.field) ||
+        seen.has(result.field) ||
+        result.field !== FIELDS[index].key
+      ) {
         return false;
       }
       if (!["PASS", "FAIL"].includes(result.status)) {
@@ -341,7 +412,10 @@
       if (
         !(
           result.score === null ||
-          (typeof result.score === "number" && Number.isFinite(result.score))
+          (typeof result.score === "number" &&
+            Number.isFinite(result.score) &&
+            result.score >= 0 &&
+            result.score <= 100)
         ) ||
         !(result.detail === null || typeof result.detail === "string")
       ) {
@@ -481,15 +555,12 @@
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const submittedAt = window.performance?.now?.() ?? Date.now();
     hideStaleResults();
 
     if (!validateForm()) {
       return;
     }
-
-    const formData = new FormData();
-    formData.append("image", imageInput.files[0]);
-    formData.append("application", JSON.stringify(applicationPayload()));
 
     const controller = new AbortController();
     const timeout = window.setTimeout(
@@ -501,6 +572,9 @@
     setLoading(true);
 
     try {
+      const formData = new FormData();
+      formData.append("image", await optimizedUpload(imageInput.files[0]));
+      formData.append("application", JSON.stringify(applicationPayload()));
       const response = await fetch("/verify", {
         method: "POST",
         body: formData,
@@ -537,6 +611,18 @@
 
     clearErrors();
     renderResults(payload);
+    const renderedAt = window.performance?.now?.() ?? Date.now();
+    results.dataset.clickToResultMs = String(
+      Math.max(0, Math.round(renderedAt - submittedAt)),
+    );
+    try {
+      window.performance?.measure?.("single-label-click-to-result", {
+        start: submittedAt,
+        end: renderedAt,
+      });
+    } catch (_unsupportedPerformanceApi) {
+      // The result is already rendered; browser telemetry is optional.
+    }
   });
 
   startOverButton.addEventListener("click", () => {
@@ -585,13 +671,13 @@
     wrapper.append(label);
 
     if (field.key === "government_warning") {
-      wrapper.append(
-        makeTextElement(
+      const help = makeTextElement(
           "p",
           "field-help important-help",
           "Copy this exactly, including capital letters, spaces, and punctuation.",
-        ),
       );
+      help.id = `${id}-help`;
+      wrapper.append(help);
     }
 
     const input = document.createElement(
@@ -606,7 +692,10 @@
     } else {
       input.rows = 5;
     }
-    input.setAttribute("aria-describedby", `${id}-error`);
+    input.setAttribute(
+      "aria-describedby",
+      field.key === "government_warning" ? `${id}-help ${id}-error` : `${id}-error`,
+    );
     input.addEventListener("input", () => {
       if (input.value.trim()) {
         input.removeAttribute("aria-invalid");
@@ -648,7 +737,9 @@
     heading.className = "batch-card-heading";
     const titleGroup = document.createElement("div");
     titleGroup.className = "section-heading";
-    titleGroup.append(makeTextElement("span", "step-number batch-card-number", ""));
+    const number = makeTextElement("span", "step-number batch-card-number", "");
+    number.setAttribute("aria-hidden", "true");
+    titleGroup.append(number);
     const title = makeTextElement("h2", "batch-card-title", "");
     title.id = `batch-${cardId}-heading`;
     card.setAttribute("aria-labelledby", title.id);
@@ -798,13 +889,20 @@
     return true;
   }
 
-  function batchSubmission() {
+  async function batchSubmission() {
     const formData = new FormData();
     const applications = [];
-    for (const card of batchCards.querySelectorAll(".batch-card")) {
+    const cards = [...batchCards.querySelectorAll(".batch-card")];
+    const optimized = await Promise.all(
+      cards.map((card) => {
+        const cardId = card.dataset.cardId;
+        const image = document.getElementById(batchInputId(cardId, "image"));
+        return optimizedUpload(image.files[0]);
+      }),
+    );
+    for (const [index, card] of cards.entries()) {
       const cardId = card.dataset.cardId;
-      const image = document.getElementById(batchInputId(cardId, "image"));
-      formData.append("images", image.files[0]);
+      formData.append("images", optimized[index]);
       applications.push(
         Object.fromEntries(
           FIELDS.map((field) => [
@@ -855,7 +953,8 @@
         summary.total ||
       payload.items.length !== summary.total ||
       typeof payload.latency_ms !== "number" ||
-      !Number.isFinite(payload.latency_ms)
+      !Number.isFinite(payload.latency_ms) ||
+      payload.latency_ms < 0
     ) {
       return false;
     }
@@ -865,13 +964,21 @@
         !item ||
         item.index !== index ||
         typeof item.filename !== "string" ||
+        item.filename.length < 1 ||
+        item.filename.length > 255 ||
         !Object.hasOwn(derived, item.status)
       ) {
         return false;
       }
       derived[item.status] += 1;
       if (item.status === "UNABLE_TO_VERIFY") {
-        if (item.result !== null || !item.error || typeof item.error.code !== "string") {
+        if (
+          item.result !== null ||
+          !item.error ||
+          typeof item.error.code !== "string" ||
+          typeof item.error.message !== "string" ||
+          !(item.error.field === null || typeof item.error.field === "string")
+        ) {
           return false;
         }
       } else if (
@@ -918,7 +1025,7 @@
         makeTextElement(
           "p",
           "failure-reason",
-          friendlyApiError(item.error.code, item.error.field, null),
+          friendlyApiError(item.error.code, item.error.field, null, item.error.message),
         ),
       );
     } else {
@@ -981,12 +1088,37 @@
     } else if (error instanceof TypeError) {
       message = "We couldn’t connect. Check your internet connection and try again.";
     } else if (error.apiError) {
-      message = friendlyApiError(error.apiError.code, error.apiError.field, error.retryAfter);
+      message = friendlyApiError(
+        error.apiError.code,
+        error.apiError.field,
+        error.retryAfter,
+        error.apiError.message,
+      );
     }
     batchErrorTitle.textContent = "We couldn’t check this batch";
     batchErrorMessage.textContent = message;
     show(batchErrorSummary);
-    batchErrorSummary.focus();
+    const input = error.apiError ? batchApiInput(error.apiError.field) : null;
+    if (input) {
+      const fieldError = document.getElementById(`${input.id}-error`);
+      showBatchFieldError(input, fieldError, message);
+      input.focus();
+    } else {
+      batchErrorSummary.focus();
+    }
+  }
+
+  function batchApiInput(fieldName) {
+    const match = /^(applications|images)\[(\d+)](?:\.([a-z_]+))?$/.exec(fieldName || "");
+    if (!match) {
+      return null;
+    }
+    const card = batchCards.querySelectorAll(".batch-card")[Number(match[2])];
+    if (!card) {
+      return null;
+    }
+    const key = match[1] === "images" ? "image" : match[3];
+    return key ? document.getElementById(batchInputId(card.dataset.cardId, key)) : null;
   }
 
   addLabelButton.addEventListener("click", addBatchCard);
@@ -1011,7 +1143,7 @@
     try {
       const response = await fetch("/verify/batch", {
         method: "POST",
-        body: batchSubmission(),
+        body: await batchSubmission(),
         signal: controller.signal,
       });
       let body = null;
