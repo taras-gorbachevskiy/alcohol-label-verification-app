@@ -186,7 +186,14 @@ scaling replicas.
 
 ## Limitations
 
-- Batch accepts at most five labels per request (not peak-season hundreds).
+- **Batch scale.** The UI and API accept at most five labels per request so
+  the shared latency budget and free-tier vision spend stay viable. Peak-season
+  dumps of hundreds of applications would need a different intake model
+  (queues, async jobs, or multi-request workflows)—out of scope for this PoC.
+- **Outbound cloud vision.** Extraction calls the OpenAI API over the public
+  internet. That works on Railway; a locked-down agency network that blocks
+  those endpoints would need a private/VNet path or an on-prem model before
+  agents could use the tool.
 - Imperfect warning areas often extract as `null` → warning FAIL /
   `NEEDS_REVIEW` rather than a guessed string.
 - Accuracy and latency depend on the cloud vision model and network.
