@@ -66,6 +66,21 @@ function createPage(fetchImpl, { captureTimeout = false } = {}) {
   window.URL.revokeObjectURL = () => {};
   window.HTMLElement.prototype.scrollIntoView = () => {};
   window.scrollTo = () => {};
+  if (window.HTMLDialogElement) {
+    const proto = window.HTMLDialogElement.prototype;
+    if (typeof proto.showModal !== "function") {
+      proto.showModal = function showModal() {
+        this.setAttribute("open", "");
+        this.open = true;
+      };
+    }
+    if (typeof proto.close !== "function") {
+      proto.close = function close() {
+        this.removeAttribute("open");
+        this.open = false;
+      };
+    }
+  }
   if (captureTimeout) {
     window.setTimeout = (callback) => {
       timeoutCallbacks.push(callback);
@@ -150,6 +165,15 @@ function checkLabels(page) {
   page.document.getElementById("queue-form").dispatchEvent(
     new page.window.Event("submit", { bubbles: true, cancelable: true }),
   );
+}
+
+function openDemoConfirm(page) {
+  page.document.getElementById("load-demo-button").click();
+}
+
+function confirmDemoLoad(page) {
+  openDemoConfirm(page);
+  page.document.getElementById("demo-confirm-accept").click();
 }
 
 const DEMO_SCENARIOS = [
@@ -297,7 +321,7 @@ test("load demo labels fills the queue for batch check", async () => {
     }),
   );
 
-  page.document.getElementById("load-demo-button").click();
+  confirmDemoLoad(page);
   await waitFor(
     () => page.document.querySelectorAll(".queue-item").length === 3,
   );
@@ -333,7 +357,7 @@ test("load demo labels shows a readable error when assets fail", async () => {
     response({ error: { code: "MISSING", message: "gone", field: null } }, { status: 404 }),
   );
 
-  page.document.getElementById("load-demo-button").click();
+  confirmDemoLoad(page);
   const errorSummary = page.document.getElementById("error-summary");
   await waitFor(() => !errorSummary.hidden);
 
@@ -372,7 +396,7 @@ test("three mixed labels render summary and drill-down", async () => {
     JSON.parse(request.options.body.get("applications"))[2].brand,
     "label 3 brand",
   );
-  assert.match(page.document.getElementById("summary").textContent, /Passed\s*1/);
+  assert.match(page.document.getElementById("summary").textContent, /APPROVED\s*1/);
   assert.match(page.document.getElementById("summary").textContent, /Needs review\s*1/);
   assert.match(
     page.document.getElementById("summary").textContent,
@@ -474,7 +498,7 @@ test("edit then check without update is blocked and keeps the draft", async () =
   assert.equal(page.document.getElementById("brand").value, "label 2 brand");
   assert.match(
     page.document.getElementById("error-summary").textContent,
-    /Update Queue or clear the form before checking/i,
+    /Update Queue or Cancel before checking/i,
   );
   page.dom.window.close();
 });
@@ -542,8 +566,46 @@ test("dirty compose blocks check until queued or cleared", async () => {
   assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
   assert.match(
     page.document.getElementById("error-summary").textContent,
-    /Add to Queue or clear the form before checking/i,
+    /Add to Queue or Cancel before checking/i,
   );
+  page.dom.window.close();
+});
+
+test("cancel restores an edited label to the queue", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+
+  page.document.querySelectorAll(".queue-edit")[1].click();
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.equal(page.document.getElementById("cancel-compose-button").hidden, false);
+
+  page.document.getElementById("brand").value = "discarded brand";
+  page.document.getElementById("cancel-compose-button").click();
+
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.equal(page.document.getElementById("brand").value, "");
+  assert.equal(page.document.getElementById("cancel-compose-button").hidden, true);
+  assert.equal(page.document.getElementById("add-to-queue-button").textContent, "Add to Queue");
+  const names = [...page.document.querySelectorAll(".queue-item-file")].map(
+    (node) => node.textContent,
+  );
+  assert.deepEqual(names, ["label-1.jpg", "label-2.jpg"]);
+  page.dom.window.close();
+});
+
+test("cancel clears a dirty compose without touching the queue", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  fillCompose(page, 2);
+  page.document.getElementById("brand").dispatchEvent(new page.window.Event("input"));
+
+  assert.equal(page.document.getElementById("cancel-compose-button").hidden, false);
+  page.document.getElementById("cancel-compose-button").click();
+
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 1);
+  assert.equal(page.document.getElementById("brand").value, "");
+  assert.equal(page.document.getElementById("cancel-compose-button").hidden, true);
   page.dom.window.close();
 });
 
@@ -578,7 +640,7 @@ test("demo load disables check until finished and replaces an existing queue", a
   addToQueue(page, 1);
   assert.equal(page.document.getElementById("check-button").disabled, false);
 
-  page.document.getElementById("load-demo-button").click();
+  confirmDemoLoad(page);
   await waitFor(() => page.document.getElementById("check-button").disabled);
   assert.equal(page.document.getElementById("add-to-queue-button").disabled, true);
   assert.equal(typeof releaseManifest, "function");
@@ -594,6 +656,24 @@ test("demo load disables check until finished and replaces an existing queue", a
   );
   assert.equal(page.document.getElementById("check-button").disabled, false);
   assert.equal(page.document.getElementById("add-to-queue-button").disabled, false);
+  page.dom.window.close();
+});
+
+test("demo load confirm cancel keeps the existing queue", () => {
+  const page = createPage(async () => response({}));
+  addToQueue(page, 1);
+  addToQueue(page, 2);
+
+  openDemoConfirm(page);
+  const dialog = page.document.getElementById("demo-confirm-dialog");
+  assert.equal(dialog.open || dialog.hasAttribute("open"), true);
+  assert.match(dialog.textContent, /replaces any labels/i);
+
+  page.document.getElementById("demo-confirm-cancel").click();
+
+  assert.equal(dialog.open || dialog.hasAttribute("open"), false);
+  assert.equal(page.document.querySelectorAll(".queue-item").length, 2);
+  assert.equal(page.document.activeElement, page.document.getElementById("load-demo-button"));
   page.dom.window.close();
 });
 

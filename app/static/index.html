@@ -200,9 +200,19 @@
             <p class="field-error" id="government_warning-error" hidden></p>
           </div>
 
-          <button class="secondary-button" id="add-to-queue-button" type="button">
-            Add to Queue
-          </button>
+          <div class="compose-actions">
+            <button class="secondary-button" id="add-to-queue-button" type="button">
+              Add to Queue
+            </button>
+            <button
+              class="secondary-button"
+              id="cancel-compose-button"
+              type="button"
+              hidden
+            >
+              Cancel
+            </button>
+          </div>
           <p class="queue-limit-note" id="queue-limit-note" role="status" hidden>
             You already have five labels queued. Check them, or remove one to add
             another.
@@ -250,5 +260,29 @@
         </div>
       </section>
     </main>
+
+    <dialog
+      class="confirm-dialog"
+      id="demo-confirm-dialog"
+      aria-labelledby="demo-confirm-title"
+      aria-describedby="demo-confirm-message"
+    >
+      <h2 id="demo-confirm-title">Load demo labels?</h2>
+      <p id="demo-confirm-message">
+        This replaces any labels already in your queue and clears the form.
+      </p>
+      <div class="confirm-dialog-actions">
+        <button
+          class="secondary-button"
+          id="demo-confirm-cancel"
+          type="button"
+        >
+          Keep my labels
+        </button>
+        <button class="primary-button" id="demo-confirm-accept" type="button">
+          Load demo labels
+        </button>
+      </div>
+    </dialog>
   </body>
 </html>
