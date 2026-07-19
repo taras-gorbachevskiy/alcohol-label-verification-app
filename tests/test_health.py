@@ -15,6 +15,7 @@ def test_index_serves_verification_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
-    assert "Check an Alcohol Label" in response.text
-    assert 'id="verification-form"' in response.text
-    assert '/static/app.js' in response.text
+    assert "Check Alcohol Labels" in response.text
+    assert 'id="queue-form"' in response.text
+    assert 'id="load-demo-button"' in response.text
+    assert "/static/app.js" in response.text
