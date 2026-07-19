@@ -30,9 +30,14 @@ from app.vision.prompt import SYSTEM_PROMPT, USER_PROMPT
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-4.1-mini-2025-04-14"
 DEFAULT_TIMEOUT_SECONDS = 4.0
 MAX_COMPLETION_TOKENS = 400
+BENCHMARK_MODELS = (
+    "gpt-4o-mini-2024-07-18",
+    "gpt-4.1-mini-2025-04-14",
+    "gpt-5.4-nano-2026-03-17",
+)
 
 _CONFIGURATION_ERRORS = (
     BadRequestError,
@@ -67,8 +72,13 @@ class VisionService:
         model: str | None = None,
         *,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        system_prompt: str = SYSTEM_PROMPT,
+        image_detail: str = "high",
     ) -> None:
         self._model = model or os.environ.get("OPENAI_VISION_MODEL", DEFAULT_MODEL)
+        self._system_prompt = system_prompt
+        self._image_detail = image_detail
+        self._last_usage: dict[str, Any] | None = None
         if client is not None:
             self._client = client
         else:
@@ -110,29 +120,15 @@ class VisionService:
         API for unvalidated image bytes.
         """
 
-        data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode(
-            "ascii"
-        )
-
+        self._last_usage = None
         try:
             completion = self._client.chat.completions.parse(
                 model=self._model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": USER_PROMPT},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": data_url,
-                                    "detail": "high",
-                                },
-                            },
-                        ],
-                    },
-                ],
+                messages=_messages(
+                    jpeg_bytes,
+                    system_prompt=self._system_prompt,
+                    image_detail=self._image_detail,
+                ),
                 response_format=ExtractedLabel,
                 max_completion_tokens=MAX_COMPLETION_TOKENS,
             )
@@ -156,6 +152,7 @@ class VisionService:
                 "The vision provider returned an invalid structured response."
             ) from exc
 
+        self._last_usage = _completion_usage(completion)
         try:
             message = completion.choices[0].message
         except (AttributeError, IndexError, TypeError) as exc:
@@ -189,6 +186,12 @@ class VisionService:
                 "The vision provider returned an invalid extraction."
             ) from exc
 
+    @property
+    def last_usage(self) -> dict[str, Any] | None:
+        """Provider usage for the most recent sequential benchmark call."""
+
+        return self._last_usage.copy() if self._last_usage is not None else None
+
 
 class AsyncVisionService:
     """Async structured extraction used by concurrent batch verification."""
@@ -199,8 +202,12 @@ class AsyncVisionService:
         model: str | None = None,
         *,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        system_prompt: str = SYSTEM_PROMPT,
+        image_detail: str = "high",
     ) -> None:
         self._model = model or os.environ.get("OPENAI_VISION_MODEL", DEFAULT_MODEL)
+        self._system_prompt = system_prompt
+        self._image_detail = image_detail
         if client is not None:
             self._client = client
         else:
@@ -217,28 +224,14 @@ class AsyncVisionService:
             )
 
     async def extract_preprocessed(self, jpeg_bytes: bytes) -> ExtractedLabel:
-        data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode(
-            "ascii"
-        )
         try:
             completion = await self._client.chat.completions.parse(
                 model=self._model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": USER_PROMPT},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": data_url,
-                                    "detail": "high",
-                                },
-                            },
-                        ],
-                    },
-                ],
+                messages=_messages(
+                    jpeg_bytes,
+                    system_prompt=self._system_prompt,
+                    image_detail=self._image_detail,
+                ),
                 response_format=ExtractedLabel,
                 max_completion_tokens=MAX_COMPLETION_TOKENS,
             )
@@ -299,9 +292,59 @@ class AsyncVisionService:
 
 
 def _normalize_empties(label: ExtractedLabel) -> ExtractedLabel:
-    """Treat empty / whitespace-only strings as missing (None)."""
+    """Treat empty strings as missing and remove OCR layout line wrapping."""
     data = label.model_dump()
     for key, value in data.items():
         if isinstance(value, str) and not value.strip():
             data[key] = None
+    warning = data.get("government_warning")
+    if isinstance(warning, str):
+        # A printed line wrap is page layout, not a character in the warning.
+        # Preserve all other whitespace so exact comparison remains strict.
+        data["government_warning"] = warning.replace("\r\n", " ").replace(
+            "\r", " "
+        ).replace("\n", " ")
     return ExtractedLabel(**data)
+
+
+def _messages(
+    jpeg_bytes: bytes,
+    *,
+    system_prompt: str,
+    image_detail: str,
+) -> list[dict[str, Any]]:
+    if image_detail not in {"low", "high", "auto"}:
+        raise ValueError("image_detail must be low, high, or auto")
+    data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode(
+        "ascii"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": USER_PROMPT},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_url, "detail": image_detail},
+                },
+            ],
+        },
+    ]
+
+
+def _completion_usage(completion: Any) -> dict[str, Any] | None:
+    usage = getattr(completion, "usage", None)
+    if usage is None:
+        return None
+    if hasattr(usage, "model_dump"):
+        dumped = usage.model_dump()
+        return dumped if isinstance(dumped, dict) else None
+    if isinstance(usage, dict):
+        return usage.copy()
+    result: dict[str, Any] = {}
+    for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = getattr(usage, name, None)
+        if isinstance(value, int):
+            result[name] = value
+    return result or None

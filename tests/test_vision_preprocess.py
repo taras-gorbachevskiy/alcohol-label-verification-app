@@ -30,13 +30,36 @@ def test_preprocess_downscales_long_side() -> None:
     out = preprocess_image(_png_bytes(3000, 1000))
     with Image.open(BytesIO(out)) as image:
         assert max(image.size) <= MAX_LONG_SIDE
-        assert image.size == (MAX_LONG_SIDE, 512)
+        assert image.size == (MAX_LONG_SIDE, round(MAX_LONG_SIDE / 3))
 
 
 def test_preprocess_does_not_upscale_small_image() -> None:
     out = preprocess_image(_png_bytes(32, 24))
     with Image.open(BytesIO(out)) as image:
         assert image.size == (32, 24)
+
+
+def test_preprocess_accepts_phase6_tuning_profile() -> None:
+    out = preprocess_image(
+        _png_bytes(3000, 1000),
+        max_long_side=1024,
+        jpeg_quality=80,
+    )
+    with Image.open(BytesIO(out)) as image:
+        assert image.size == (1024, 341)
+
+
+@pytest.mark.parametrize(
+    ("side", "quality"),
+    [(0, 85), (1280, 0), (1280, 96)],
+)
+def test_preprocess_rejects_invalid_tuning_profile(side: int, quality: int) -> None:
+    with pytest.raises(ValueError):
+        preprocess_image(
+            _png_bytes(8, 8),
+            max_long_side=side,
+            jpeg_quality=quality,
+        )
 
 
 def test_preprocess_applies_exif_orientation() -> None:

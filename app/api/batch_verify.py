@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.verify import (
     VerifyApiError,
+    _guard_warning_extraction,
     _parse_application,
     _preprocess_upload,
     elapsed_verify_ms,
@@ -131,6 +132,32 @@ def _prepare_item(
         )
 
 
+def _prepare_indexed_item(
+    index: int,
+    image: UploadFile,
+    application_payload: Any,
+) -> tuple[VerificationApplicationData, bytes] | VerifyApiError:
+    """Add an exact batch item path without changing the tested worker seam."""
+
+    prepared = _prepare_item(image, application_payload)
+    if not isinstance(prepared, VerifyApiError):
+        return prepared
+    field = prepared.field
+    if field == "image":
+        field = f"images[{index}]"
+    elif field == "application":
+        field = f"applications[{index}]"
+    elif field and field.startswith("application."):
+        field = f"applications[{index}].{field.removeprefix('application.')}"
+    return VerifyApiError(
+        prepared.status_code,
+        prepared.code,
+        prepared.message,
+        field=field,
+        headers=prepared.headers,
+    )
+
+
 def _unavailable_item(
     index: int,
     filename: str,
@@ -171,6 +198,7 @@ async def _verify_prepared_item(
             service.extract_preprocessed(jpeg_bytes),
             timeout=timeout,
         )
+        extracted = _guard_warning_extraction(application, extracted)
         result = compare_labels(application.to_application_data(), extracted)
         result.latency_ms = round(max(0.0, (_clock() - started_at) * 1_000), 2)
         return BatchItemResult(
@@ -315,8 +343,12 @@ async def verify_batch(
 
     try:
         preparation_tasks = [
-            asyncio.create_task(asyncio.to_thread(_prepare_item, image, application))
-            for image, application in zip(images, manifest, strict=True)
+            asyncio.create_task(
+                asyncio.to_thread(_prepare_indexed_item, index, image, application)
+            )
+            for index, (image, application) in enumerate(
+                zip(images, manifest, strict=True)
+            )
         ]
         for index, task in enumerate(preparation_tasks):
             task.add_done_callback(

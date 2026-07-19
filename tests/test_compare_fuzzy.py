@@ -17,6 +17,11 @@ def test_brand_case_only_diff_passes() -> None:
     assert result.score >= 85
 
 
+def test_stakeholder_stones_throw_case_only_example_passes() -> None:
+    result = compare_brand("STONE'S THROW", "Stone's Throw")
+    assert result.status == "PASS"
+
+
 def test_brand_extra_spaces_passes() -> None:
     result = compare_brand("ACME  WINE", "ACME WINE")
     assert result.status == "PASS"

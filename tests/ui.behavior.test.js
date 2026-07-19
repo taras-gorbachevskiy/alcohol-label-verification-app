@@ -4,6 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const { JSDOM } = require("jsdom");
+const axe = require("axe-core");
 
 const ROOT = path.resolve(__dirname, "..");
 const HTML = fs.readFileSync(path.join(ROOT, "app/static/index.html"), "utf8");
@@ -175,6 +176,26 @@ async function waitFor(predicate, message = "condition was not met") {
   assert.fail(message);
 }
 
+async function assertNoAxeViolations(page, state) {
+  page.window.eval(axe.source);
+  const result = await page.window.axe.run(page.document, {
+    rules: {
+      // JSDOM does not calculate layout or loaded stylesheet colors. Explicit
+      // color-pair tests in test_ui.py cover the committed palette instead.
+      "color-contrast": { enabled: false },
+    },
+  });
+  const violations = result.violations.map((violation) => ({
+      id: violation.id,
+      targets: violation.nodes.map((node) => node.target),
+    }));
+  assert.equal(
+    JSON.stringify(violations),
+    "[]",
+    `${state} has automated accessibility violations`,
+  );
+}
+
 test("successful verification replaces the form with one clear result action", async () => {
   let request = null;
   const page = createPage(async (url, options) => {
@@ -193,6 +214,7 @@ test("successful verification replaces the form with one clear result action", a
   assert.equal(form.hidden, true);
   assert.equal(results.hidden, false);
   assert.equal(page.document.activeElement, results);
+  assert.match(results.dataset.clickToResultMs, /^\d+$/);
   assert.match(results.textContent, /NEEDS REVIEW/);
   assert.match(results.textContent, /Brand name/);
   assert.match(results.textContent, /brand name does not match/i);
@@ -384,6 +406,11 @@ const invalidPayloads = {
     ...verificationPayload(),
     verdict: "NEEDS_REVIEW",
   },
+  "fields out of order": (() => {
+    const payload = verificationPayload();
+    [payload.fields[0], payload.fields[1]] = [payload.fields[1], payload.fields[0]];
+    return payload;
+  })(),
 };
 
 for (const [name, payload] of Object.entries(invalidPayloads)) {
@@ -491,8 +518,146 @@ test("batch progress appears only after the delay", async () => {
   assert.equal(page.document.getElementById("batch-progress").hidden, false);
   assert.match(page.document.getElementById("batch-progress").textContent, /Checking 2 labels/);
 
+  await waitFor(() => typeof resolveFetch === "function");
   resolveFetch(response(batchPayload([{ status: "PASS" }, { status: "PASS" }])));
   await waitFor(() => !page.document.getElementById("batch-results").hidden);
   assert.equal(page.document.getElementById("batch-progress").hidden, true);
   page.dom.window.close();
+});
+
+test("empty submission focuses the photo and makes no request", () => {
+  let fetchCalls = 0;
+  const page = createPage(async () => {
+    fetchCalls += 1;
+    return response({});
+  });
+
+  submit(page);
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(page.document.activeElement, page.document.getElementById("image"));
+  assert.match(page.document.getElementById("error-summary").textContent, /fix 8 items/i);
+  page.dom.window.close();
+});
+
+test("wrong file type is rejected before fetch and preserves entries", () => {
+  let fetchCalls = 0;
+  const page = createPage(async () => {
+    fetchCalls += 1;
+    return response({});
+  });
+  fillForm(page);
+  const image = page.document.getElementById("image");
+  Object.defineProperty(image, "files", {
+    configurable: true,
+    value: [new page.window.File(["text"], "label.txt", { type: "text/plain" })],
+  });
+
+  submit(page);
+
+  assert.equal(fetchCalls, 0);
+  assert.equal(page.document.activeElement, image);
+  assert.equal(page.document.getElementById("brand").value, "entered brand");
+  assert.match(page.document.getElementById("image-error").textContent, /JPG, PNG, or WebP/);
+  page.dom.window.close();
+});
+
+test("large supported image is optimized before single-label upload", async () => {
+  let request;
+  const page = createPage(async (url, options) => {
+    request = { url, options };
+    return response(verificationPayload());
+  });
+  fillForm(page);
+  page.window.createImageBitmap = async () => ({ width: 2400, height: 1200, close() {} });
+  page.window.HTMLCanvasElement.prototype.getContext = () => ({
+    fillStyle: "",
+    fillRect() {},
+    drawImage() {},
+  });
+  page.window.HTMLCanvasElement.prototype.toBlob = (callback, type) => {
+    callback(new page.window.Blob(["optimized-jpeg"], { type }));
+  };
+
+  submit(page);
+  await waitFor(() => request !== undefined);
+
+  const uploaded = request.options.body.get("image");
+  assert.equal(uploaded.type, "image/jpeg");
+  assert.equal(uploaded.size, "optimized-jpeg".length);
+  page.dom.window.close();
+});
+
+test("batch API field path focuses the exact card and field", async () => {
+  const page = createPage(async () =>
+    response(
+      {
+        error: {
+          code: "INVALID_APPLICATION",
+          message: "Brand name must be text.",
+          field: "applications[1].brand",
+        },
+      },
+      { status: 422 },
+    ),
+  );
+  const cards = openBatch(page);
+  cards.forEach((card, index) => fillBatchCard(page, card, index + 1));
+
+  page.document.getElementById("batch-form").dispatchEvent(
+    new page.window.Event("submit", { bubbles: true, cancelable: true }),
+  );
+  const target = cards[1].querySelector('input[name="brand"]');
+  await waitFor(() => page.document.activeElement === target);
+
+  assert.equal(target.getAttribute("aria-invalid"), "true");
+  assert.match(page.document.getElementById(`${target.id}-error`).textContent, /must be text/i);
+  page.dom.window.close();
+});
+
+test("dynamic batch warning has programmatic help and error descriptions", () => {
+  const page = createPage(async () => response({}));
+  const card = openBatch(page)[0];
+  const warning = card.querySelector('textarea[name="government_warning"]');
+  const describedBy = warning.getAttribute("aria-describedby").split(" ");
+
+  assert.equal(describedBy.length, 2);
+  assert.ok(describedBy.every((id) => page.document.getElementById(id)));
+  assert.match(page.document.getElementById(describedBy[0]).textContent, /Copy this exactly/);
+  page.dom.window.close();
+});
+
+test("automated accessibility scan passes every required UI state", async () => {
+  const emptyPage = createPage(async () => response({}));
+  await assertNoAxeViolations(emptyPage, "empty state");
+  submit(emptyPage);
+  await assertNoAxeViolations(emptyPage, "error state");
+  emptyPage.dom.window.close();
+
+  const loadingPage = createPage(() => new Promise(() => {}));
+  fillForm(loadingPage);
+  submit(loadingPage);
+  await waitFor(() => loadingPage.document.getElementById("submit-button").disabled);
+  await assertNoAxeViolations(loadingPage, "loading state");
+  loadingPage.dom.window.close();
+
+  const resultPage = createPage(async () => response(verificationPayload()));
+  fillForm(resultPage);
+  submit(resultPage);
+  await waitFor(() => !resultPage.document.getElementById("results").hidden);
+  await assertNoAxeViolations(resultPage, "single-result state");
+  resultPage.dom.window.close();
+
+  const batchPage = createPage(async () =>
+    response(batchPayload([{ status: "PASS" }, { status: "NEEDS_REVIEW" }])),
+  );
+  const cards = openBatch(batchPage);
+  await assertNoAxeViolations(batchPage, "batch state");
+  cards.forEach((card, index) => fillBatchCard(batchPage, card, index + 1));
+  batchPage.document.getElementById("batch-form").dispatchEvent(
+    new batchPage.window.Event("submit", { bubbles: true, cancelable: true }),
+  );
+  await waitFor(() => !batchPage.document.getElementById("batch-results").hidden);
+  await assertNoAxeViolations(batchPage, "batch drill-down state");
+  batchPage.dom.window.close();
 });

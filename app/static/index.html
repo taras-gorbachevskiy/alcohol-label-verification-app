@@ -9,6 +9,7 @@
     <script src="/static/app.js" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to label checker</a>
     <header class="site-header">
       <div class="page-width">
         <p class="agency-name">Alcohol Label Verification</p>
@@ -250,6 +251,8 @@
         class="results"
         id="results"
         aria-labelledby="results-title"
+        aria-live="polite"
+        aria-atomic="true"
         tabindex="-1"
         hidden
       >
@@ -271,6 +274,8 @@
         class="results batch-results"
         id="batch-results"
         aria-labelledby="batch-results-title"
+        aria-live="polite"
+        aria-atomic="true"
         tabindex="-1"
         hidden
       >

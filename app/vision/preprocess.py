@@ -6,8 +6,8 @@ from io import BytesIO
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-MAX_LONG_SIDE = 1536
-JPEG_QUALITY = 85
+MAX_LONG_SIDE = 1280
+JPEG_QUALITY = 82
 MAX_INPUT_BYTES = 20 * 1024 * 1024
 MAX_INPUT_PIXELS = 50_000_000
 SUPPORTED_CONTENT_TYPES = {
@@ -25,7 +25,13 @@ class ImagePreprocessError(ValueError):
         self.reason = reason
 
 
-def preprocess_image(data: bytes, content_type: str | None = None) -> bytes:
+def preprocess_image(
+    data: bytes,
+    content_type: str | None = None,
+    *,
+    max_long_side: int = MAX_LONG_SIDE,
+    jpeg_quality: int = JPEG_QUALITY,
+) -> bytes:
     """Return JPEG bytes with longest side <= MAX_LONG_SIDE.
 
     When ``content_type`` is supplied, enforce the endpoint's supported image
@@ -34,6 +40,10 @@ def preprocess_image(data: bytes, content_type: str | None = None) -> bytes:
     Raises:
         ImagePreprocessError: corrupt or undecodable input.
     """
+    if max_long_side < 1:
+        raise ValueError("max_long_side must be positive")
+    if not 1 <= jpeg_quality <= 95:
+        raise ValueError("jpeg_quality must be between 1 and 95")
     if not data:
         raise ImagePreprocessError("empty image bytes", reason="empty_image")
     if len(data) > MAX_INPUT_BYTES:
@@ -78,9 +88,9 @@ def preprocess_image(data: bytes, content_type: str | None = None) -> bytes:
                 rgb.paste(rgba, mask=rgba.getchannel("A"))
             else:
                 rgb = oriented.convert("RGB")
-            rgb.thumbnail((MAX_LONG_SIDE, MAX_LONG_SIDE), Image.Resampling.LANCZOS)
+            rgb.thumbnail((max_long_side, max_long_side), Image.Resampling.LANCZOS)
             out = BytesIO()
-            rgb.save(out, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+            rgb.save(out, format="JPEG", quality=jpeg_quality, optimize=True)
             return out.getvalue()
     except ImagePreprocessError:
         raise

@@ -36,6 +36,17 @@ logger = logging.getLogger("uvicorn.error.app.verify")
 
 LATENCY_BUDGET_MS = 5_000.0
 _clock = time.perf_counter
+_stage_clock = time.perf_counter
+
+_FIELD_LABELS = {
+    "brand": "Brand name",
+    "class_type": "Type of alcohol",
+    "producer": "Company shown on the label",
+    "country": "Country of origin",
+    "abv": "Alcohol percentage",
+    "net_contents": "Bottle size",
+    "government_warning": "Government warning text",
+}
 
 router = APIRouter()
 
@@ -55,6 +66,18 @@ def _cached_vision_service() -> VisionService:
 def get_vision_service_factory() -> VisionServiceFactory:
     """Inject a lazy factory so invalid requests do not require API setup."""
     return _cached_vision_service
+
+
+def _guard_warning_extraction(
+    application: VerificationApplicationData,
+    extracted: ExtractedLabel,
+) -> ExtractedLabel:
+    """Degrade altered warning OCR to missing instead of exposing guessed text."""
+
+    warning = extracted.government_warning
+    if warning is None or warning == application.government_warning:
+        return extracted
+    return extracted.model_copy(update={"government_warning": None})
 
 
 class VerifyApiError(Exception):
@@ -114,13 +137,28 @@ def log_verify_completion(request: Request, status_code: int) -> None:
             getattr(request.state, "rate_limit_scope", "-"),
         )
     else:
+        preprocess_ms = getattr(request.state, "preprocess_ms", 0.0)
+        provider_ms = getattr(request.state, "provider_ms", 0.0)
+        compare_ms = getattr(request.state, "compare_ms", 0.0)
+        request_overhead_ms = max(
+            0.0,
+            latency_ms - preprocess_ms - provider_ms - compare_ms,
+        )
         logger.log(
             level,
             "verify_complete status_code=%d latency_ms=%.2f within_budget=%s "
-            "verdict=%s error_code=%s rate_limit_scope=%s",
+            "preprocess_ms=%s provider_ms=%s compare_ms=%s source_bytes=%s "
+            "processed_bytes=%s request_overhead_ms=%.2f verdict=%s error_code=%s "
+            "rate_limit_scope=%s",
             status_code,
             latency_ms,
             within_budget,
+            getattr(request.state, "preprocess_ms", "-"),
+            getattr(request.state, "provider_ms", "-"),
+            getattr(request.state, "compare_ms", "-"),
+            getattr(request.state, "source_bytes", "-"),
+            getattr(request.state, "processed_bytes", "-"),
+            request_overhead_ms,
             getattr(request.state, "verify_verdict", "-"),
             getattr(request.state, "verify_error_code", "-"),
             getattr(request.state, "rate_limit_scope", "-"),
@@ -261,13 +299,17 @@ async def unexpected_error_handler(
     )
 
 
-def _parse_application(application: str) -> VerificationApplicationData:
+def _parse_application(
+    application: str,
+    *,
+    field_prefix: str = "application",
+) -> VerificationApplicationData:
     if not application.strip():
         raise VerifyApiError(
             422,
             "EMPTY_APPLICATION",
             "Application data cannot be empty.",
-            field="application",
+            field=field_prefix,
         )
 
     try:
@@ -277,7 +319,7 @@ def _parse_application(application: str) -> VerificationApplicationData:
             400,
             "INVALID_APPLICATION_JSON",
             "Application data must be valid JSON.",
-            field="application",
+            field=field_prefix,
         ) from exc
 
     if not isinstance(payload, dict):
@@ -285,7 +327,7 @@ def _parse_application(application: str) -> VerificationApplicationData:
             422,
             "INVALID_APPLICATION",
             "Application data must be a JSON object containing all required fields.",
-            field="application",
+            field=field_prefix,
         )
 
     try:
@@ -294,23 +336,39 @@ def _parse_application(application: str) -> VerificationApplicationData:
         first_error = exc.errors()[0] if exc.errors() else {}
         location = first_error.get("loc", ())
         field_name = str(location[0]) if location else None
-        field = f"application.{field_name}" if field_name else "application"
-        if first_error.get("type") == "string_too_long":
+        field = f"{field_prefix}.{field_name}" if field_name else field_prefix
+        label = _FIELD_LABELS.get(field_name or "", "This value")
+        error_type = first_error.get("type")
+        if error_type == "string_too_long":
             raise VerifyApiError(
                 422,
                 "APPLICATION_FIELD_TOO_LONG",
-                "Use 2,000 characters or fewer for each application field.",
+                f"{label} must be 2,000 characters or fewer.",
                 field=field,
             ) from exc
+        if error_type == "missing":
+            message = f"Enter {label.lower()}."
+        elif error_type == "string_type":
+            message = f"{label} must be text."
+        elif error_type == "extra_forbidden":
+            message = "Remove the unexpected application field."
+        elif error_type == "value_error":
+            message = f"Enter {label.lower()}."
+        else:
+            message = "Check this value and try again."
         raise VerifyApiError(
             422,
             "INVALID_APPLICATION",
-            "Provide nonblank text values for exactly the seven required fields.",
+            message,
             field=field,
         ) from exc
 
 
-def _preprocess_upload(image: UploadFile) -> bytes:
+def _preprocess_upload(
+    image: UploadFile,
+    *,
+    metrics: dict[str, int] | None = None,
+) -> bytes:
     content_type = (image.content_type or "").split(";", 1)[0].strip().lower()
     if content_type not in SUPPORTED_CONTENT_TYPES:
         raise VerifyApiError(
@@ -337,7 +395,11 @@ def _preprocess_upload(image: UploadFile) -> bytes:
         )
 
     try:
-        return preprocess_image(image_bytes, content_type=content_type)
+        processed = preprocess_image(image_bytes, content_type=content_type)
+        if metrics is not None:
+            metrics["source_bytes"] = len(image_bytes)
+            metrics["processed_bytes"] = len(processed)
+        return processed
     except ImagePreprocessError as exc:
         if exc.reason == "image_too_large":
             raise VerifyApiError(
@@ -413,7 +475,15 @@ def verify_label(
     ],
 ) -> VerificationResult:
     application_data = _parse_application(application)
-    jpeg_bytes = _preprocess_upload(image)
+    image_metrics: dict[str, int] = {}
+    preprocess_started = _stage_clock()
+    jpeg_bytes = _preprocess_upload(image, metrics=image_metrics)
+    request.state.preprocess_ms = round(
+        max(0.0, (_stage_clock() - preprocess_started) * 1_000),
+        2,
+    )
+    request.state.source_bytes = image_metrics["source_bytes"]
+    request.state.processed_bytes = image_metrics["processed_bytes"]
 
     limiter = request.app.state.verify_limiter
     decision, lease = limiter.acquire_verification()
@@ -433,8 +503,19 @@ def verify_label(
     assert lease is not None
 
     try:
+        provider_started = _stage_clock()
         extracted = vision_service_factory().extract_preprocessed(jpeg_bytes)
+        extracted = _guard_warning_extraction(application_data, extracted)
+        request.state.provider_ms = round(
+            max(0.0, (_stage_clock() - provider_started) * 1_000),
+            2,
+        )
+        compare_started = _stage_clock()
         result = compare_labels(application_data.to_application_data(), extracted)
+        request.state.compare_ms = round(
+            max(0.0, (_stage_clock() - compare_started) * 1_000),
+            2,
+        )
     except VisionUnavailableError as exc:
         logger.warning(
             "vision unavailable error_type=%s",
@@ -462,6 +543,11 @@ def verify_label(
             ),
         ) from exc
     finally:
+        if not hasattr(request.state, "provider_ms"):
+            request.state.provider_ms = round(
+                max(0.0, (_stage_clock() - provider_started) * 1_000),
+                2,
+            )
         lease.release()
 
     latency_ms = elapsed_verify_ms(request)

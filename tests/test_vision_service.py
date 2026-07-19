@@ -28,8 +28,8 @@ from app.vision import (
     VisionService,
     VisionUnavailableError,
 )
-from app.vision.prompt import SYSTEM_PROMPT, USER_PROMPT
-from app.vision.service import MAX_COMPLETION_TOKENS
+from app.vision.prompt import COMPACT_SYSTEM_PROMPT, SYSTEM_PROMPT, USER_PROMPT
+from app.vision.service import BENCHMARK_MODELS, MAX_COMPLETION_TOKENS
 from tests.warning_fixtures import ALL_CAPS_WARNING
 
 
@@ -79,7 +79,7 @@ def test_extract_happy_path_uses_structured_format() -> None:
 
     assert result == _full_label()
     kwargs = client.chat.completions.parse.call_args.kwargs
-    assert kwargs["model"] == "gpt-4o-mini"
+    assert kwargs["model"] == "gpt-4.1-mini-2025-04-14"
     assert kwargs["response_format"] is ExtractedLabel
     assert kwargs["max_completion_tokens"] == MAX_COMPLETION_TOKENS
     assert kwargs["messages"][0]["content"] == SYSTEM_PROMPT
@@ -88,6 +88,45 @@ def test_extract_happy_path_uses_structured_format() -> None:
     assert user_content[1]["type"] == "image_url"
     assert user_content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert user_content[1]["image_url"]["detail"] == "high"
+
+
+def test_phase6_benchmark_configuration_preserves_structured_contract() -> None:
+    client = MagicMock()
+    completion = _parsed_completion(_full_label())
+    completion.usage = SimpleNamespace(
+        prompt_tokens=120,
+        completion_tokens=80,
+        total_tokens=200,
+    )
+    client.chat.completions.parse.return_value = completion
+    service = VisionService(
+        client=client,
+        model=BENCHMARK_MODELS[-1],
+        system_prompt=COMPACT_SYSTEM_PROMPT,
+        image_detail="high",
+    )
+
+    service.extract_preprocessed(_tiny_jpeg())
+
+    request = client.chat.completions.parse.call_args.kwargs
+    assert request["model"] == "gpt-5.4-nano-2026-03-17"
+    assert request["messages"][0]["content"] == COMPACT_SYSTEM_PROMPT
+    assert request["response_format"] is ExtractedLabel
+    assert service.last_usage == {
+        "prompt_tokens": 120,
+        "completion_tokens": 80,
+        "total_tokens": 200,
+    }
+
+
+def test_invalid_image_detail_fails_before_provider_call() -> None:
+    client = MagicMock()
+    service = VisionService(client=client, image_detail="original")
+
+    with pytest.raises(ValueError, match="image_detail"):
+        service.extract_preprocessed(_tiny_jpeg())
+
+    client.chat.completions.parse.assert_not_called()
 
 
 def test_extract_preprocessed_skips_preprocessing(
@@ -298,7 +337,7 @@ def test_extract_normalizes_empty_strings_to_none() -> None:
     assert result.producer == "Winery"
 
 
-def test_extract_preserves_nonempty_warning_verbatim() -> None:
+def test_extract_removes_only_ocr_layout_line_breaks_from_warning() -> None:
     warning = "  GOVERNMENT WARNING:\nExact punctuation.  "
     client = MagicMock()
     client.chat.completions.parse.return_value = _parsed_completion(
@@ -306,7 +345,9 @@ def test_extract_preserves_nonempty_warning_verbatim() -> None:
     )
     service = VisionService(client=client)
 
-    assert service.extract(_tiny_jpeg()).government_warning == warning
+    assert service.extract(_tiny_jpeg()).government_warning == (
+        "  GOVERNMENT WARNING: Exact punctuation.  "
+    )
 
 
 def test_missing_api_key_fails_fast_without_injected_client(
@@ -366,11 +407,19 @@ def test_async_live_client_disables_retries_and_uses_four_second_timeout(
 
 def test_prompt_requires_verbatim_warning_and_partial_degraded_results() -> None:
     assert "character-for-character" in SYSTEM_PROMPT
-    assert "visible line breaks" in SYSTEM_PROMPT
+    assert "never emit line-break characters" in SYSTEM_PROMPT
+    assert "return government_warning as null without attempting" in SYSTEM_PROMPT
     assert "from memory" in SYSTEM_PROMPT
     assert "set government_warning to null" in SYSTEM_PROMPT
     assert "Blurry, rotated, angled" in SYSTEM_PROMPT
     assert "set all seven fields to null" in SYSTEM_PROMPT
+
+
+def test_compact_prompt_keeps_warning_and_degradation_safety_rules() -> None:
+    assert "character-for-character" in COMPACT_SYSTEM_PROMPT
+    assert "Never normalize, repair, paraphrase" in COMPACT_SYSTEM_PROMPT
+    assert "imperfect photos are valid inputs" in COMPACT_SYSTEM_PROMPT
+    assert "return government_warning as null" in COMPACT_SYSTEM_PROMPT
 
 
 def test_fake_vision_service_returns_fixed_result_without_api_key(
