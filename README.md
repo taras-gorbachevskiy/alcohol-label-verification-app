@@ -62,6 +62,62 @@ latency, and error codes only—never application values, image bytes, or
 extracted label text. Measured stage and browser timings are in
 [docs/acceptance.md](docs/acceptance.md).
 
+## Design decisions
+
+- **Queue-only UI (not separate Single + Batch screens).** Compose → Add to
+  Queue → Check Labels; the browser always calls `POST /verify/batch` with one
+  to five items (a single label is just a one-item queue). *Why:* Batch is a
+  hard product requirement; one flow is simpler for non-technical users than
+  mode switching, and still covers the single-label case.
+- **Edit pulls into compose, with dirty guards.** Edit removes a queued label
+  into the open form until Update Queue; Check is blocked while the form is
+  dirty or mid-edit. *Why:* Prevents silently dropping a label; keeps one
+  large form on screen for senior-friendly use.
+- **Inline demo seed.** “Load 3 demo labels” fills the queue from
+  [`app/static/demo/`](app/static/demo/) (JSON + JPEGs). *Why:* Zero-instruction
+  live demo; those assets ship with the Docker image (`COPY app`), while local
+  `samples/` stay out of production.
+- **Independent batch items.** A bad sibling becomes `UNABLE_TO_VERIFY`; other
+  labels still verify; response order and summary counts stay aligned. *Why:*
+  One bad photo must not block the rest of the batch.
+- **Concurrent batch under a shared deadline.** Labels are prepared and
+  vision-extracted in parallel with a ~4.8s shared processing budget. *Why:*
+  The whole request—not each label in series—must stay under the five-second
+  product target.
+- **Exact warning vs fuzzy/normalized fields.** Government warning uses
+  case-sensitive string equality; brand/class/producer are fuzzy (≥85); country
+  uses synonyms; ABV (±0.05) and net contents use numeric/unit normalization.
+  *Why:* The warning is regulatory-strict; OCR and layout noise on other
+  fields should not force false FAILs.
+- **Conservative warning exactness.** Comparison is full case-sensitive
+  equality on the post-processed string (newlines → spaces only—not a looser
+  whitespace collapse). If the model is uncertain, or the extracted warning is
+  not an exact match to the expected TTB text, extraction stores `null`
+  (never invented wording). *Why:* Prefer “missing” / FAIL over a near-miss
+  that could false-PASS an exact match.
+- **Slim extracted payload.** `ExtractedLabel` carries only the six compared
+  fields—no `raw_text` dump and no `extraction_confidence` score. *Why:* Keeps
+  the API and UI focused on field-level PASS/FAIL; confidence is already
+  reflected by nulls and per-field status, and raw OCR text is not needed for
+  the PoC decision.
+- **Latency-first vision stack.** Pinned `gpt-4.1-mini` with structured
+  outputs, JPEG preprocess ≤1280px at quality 82 (client and server; skip
+  redundant re-encode when already bounded), ~4s provider timeout, no retries.
+  *Why:* Meet the under-five-seconds budget; fail fast rather than retry into
+  the deadline. Measured evidence:
+  [docs/acceptance.md](docs/acceptance.md).
+- **Binary verdict named `PASS` (not `APPROVED`).** Any field FAIL ⇒ overall
+  `NEEDS_REVIEW`; all fields PASS ⇒ overall `PASS` (UI: “Passed”). Same
+  binary meaning as an Approved / Needs Review outcome; wording matches the
+  field-level PASS/FAIL language. *Why:* Conservative compliance UX—anything
+  off needs a human look—and one vocabulary from field row to overall result.
+- **In-memory abuse controls.** Per-process rate and concurrency limits; a
+  batch charges one unit per label. *Why:* Protect free-tier vision spend
+  without a database (limits reset on deploy; one replica assumed).
+- **Stateless slim runtime.** No database; API keys only from environment /
+  Railway Variables; Docker image copies `app/` only. *Why:* Small free-tier
+  footprint and no secrets or demo packs outside `app/` in the image.
+
 ## Tools
 
 - Python 3.12, [uv](https://docs.astral.sh/uv/), FastAPI, Pydantic, Pillow
