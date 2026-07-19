@@ -15,38 +15,64 @@ FIELD_NAMES = (
 )
 
 
-def test_single_label_page_has_required_controls() -> None:
+def test_queue_page_has_required_controls() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
     page = response.text
+    assert 'id="queue-form"' in page
     assert 'type="file"' in page
     assert 'accept="image/jpeg,image/png,image/webp"' in page
-    assert 'id="submit-button"' in page
-    assert "Check Label" in page
+    assert 'id="add-to-queue-button"' in page
+    assert "Add to Queue" in page
+    assert 'id="load-demo-button"' in page
+    assert "Load 3 Demo Labels" in page
+    assert 'id="check-button"' in page
+    assert "Check Labels" in page
+    assert 'id="queue-list"' in page
+    assert 'id="compose-card"' in page
     assert 'id="results"' in page
     assert 'id="error-summary"' in page
+    assert 'id="result-timing"' in page
     for field_name in FIELD_NAMES:
         assert f'name="{field_name}"' in page
     assert page.count('maxlength="2000"') == 7
 
 
-def test_page_has_accessible_batch_mode_and_results_controls() -> None:
+def test_demo_static_assets_are_served() -> None:
+    manifest = client.get("/static/demo/scenarios.json")
+    assert manifest.status_code == 200
+    scenarios = manifest.json()
+    assert isinstance(scenarios, list)
+    assert len(scenarios) == 3
+    assert scenarios[0]["application"]["brand"] == "RIVERBEND RESERVE"
+    assert scenarios[1]["application"]["brand"] == "NOT THE LABEL BRAND"
+
+    clean = client.get("/static/demo/01-clean-exact-match.jpg")
+    blur = client.get("/static/demo/03-imperfect-blur.jpg")
+    assert clean.status_code == 200
+    assert blur.status_code == 200
+    assert "image" in clean.headers["content-type"]
+    assert "image" in blur.headers["content-type"]
+
+
+def test_page_has_no_single_batch_mode_toggle() -> None:
     response = client.get("/")
 
     assert response.status_code == 200
     page = response.text
-    assert 'id="single-mode-button"' in page
-    assert 'id="batch-mode-button"' in page
-    assert 'id="batch-form"' in page
-    assert 'id="add-label-button"' in page
-    assert 'id="batch-progress"' in page
-    assert 'aria-label="Batch verification in progress"' in page
-    assert 'id="batch-summary"' in page
-    assert 'id="batch-result-list"' in page
+    assert 'id="single-mode-button"' not in page
+    assert 'id="batch-mode-button"' not in page
+    assert 'id="verification-form"' not in page
+    assert 'id="batch-form"' not in page
+    assert 'id="add-label-button"' not in page
+    assert 'id="check-progress"' in page
+    assert 'aria-label="Label verification in progress"' in page
+    assert 'id="summary"' in page
+    assert 'id="result-list"' in page
     assert 'class="skip-link"' in page
-    assert page.count('aria-live="polite"') >= 3
-    assert page.count('aria-atomic="true"') == 2
+    assert page.count('aria-live="polite"') >= 2
+    assert page.count('aria-atomic="true"') == 1
 
 
 def test_page_loads_static_assets() -> None:
@@ -105,3 +131,5 @@ def test_phase6_styles_keep_senior_friendly_size_focus_and_reflow() -> None:
     assert "@media (prefers-reduced-motion: reduce)" in stylesheet
     assert "animation: none" in stylesheet
     assert "width: min(100% - 1rem, 46rem)" in stylesheet
+    assert ".queue-item" in stylesheet
+    assert ".mode-picker" not in stylesheet
